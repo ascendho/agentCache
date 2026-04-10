@@ -1,0 +1,42 @@
+# Environments
+.venv/
+venv/
+env/
+
+# Environment Variables (DO NOT COMMIT)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+develop/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Redis dumps (if running locally in the folder)
+dump.rdb
