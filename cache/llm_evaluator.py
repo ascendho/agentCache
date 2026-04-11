@@ -9,7 +9,6 @@ import pandas as pd
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 from tqdm.auto import tqdm
@@ -18,10 +17,9 @@ from tqdm.auto import tqdm
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 from dotenv import load_dotenv, find_dotenv                                  
 def load_env():
-    """加载 .env 文件，统一管理 API Key 等环境变量。"""
+    """加载 .env 文件到进程环境变量中，统一管理 API Key 等环境变量。"""
     _ = load_dotenv(find_dotenv())
 
 def set_ark_key():
@@ -31,20 +29,17 @@ def set_ark_key():
         api_key = getpass.getpass("Enter your ARK API key: ")
         os.environ["ARK_API_KEY"] = api_key
 
-
 class SimilarityResult(BaseModel):
-    """定义 LLM 返回的结构化数据模型。"""
+    """定义 LLM 返回的结构化 schema 数据模型。"""
     reason: str = Field(description="解释为什么两个句子意思相同或不同")
     is_similar: bool = Field(
         description="如果两个句子意思相同则为 True，否则为 False"
     )
 
-
 def batch_iterable(iterable, batch_size):
     """按批次切分可迭代对象，避免一次性请求数据量过大导致 OOM 或超时。"""
     for i in range(0, len(iterable), batch_size):
         yield iterable[i : i + batch_size]
-
 
 @dataclass(frozen=True)
 class LLMEvaluationResult:
@@ -53,7 +48,7 @@ class LLMEvaluationResult:
 
     @property
     def df(self):
-        """将结果列表转换为 DataFrame，便于分析。"""
+        """将结果列表转换为 DataFrame，便于分析与导出。"""
         return pd.DataFrame([dict(it) for it in self.resulting_items])
 
 
@@ -83,14 +78,6 @@ class LLMEvaluator:
                 base_url="https://ark.cn-beijing.volces.com/api/v3"
             ).with_structured_output(SimilarityResult) # 强制要求结构化输出
             return LLMEvaluator(llm, prompt)
-
-    @staticmethod
-    def construct_with_gemini(
-        prompt=DEFAULT_COMPARE_PROMPT_TEMPLATE, model="gemini-2.5-flash"
-    ):
-        """使用 Google Gemini API 构建评估器。"""
-        llm = ChatGoogleGenerativeAI(model=model, temperature=0).with_structured_output(SimilarityResult)
-        return LLMEvaluator(llm, prompt)
 
     def __init__(self, llm: BaseChatModel, prompt: str):
         """初始化评估器，构建 LangChain 运行链。"""
@@ -152,7 +139,6 @@ class LLMEvaluator:
         """基于当前评估器创建一个重排序器。"""
         return LLMReranker(self, batch_size=batch_size)
 
-
 class LLMReranker:
     """利用 LLM 评估结果对候选列表进行筛选和打分的重排序器。"""
     
@@ -163,6 +149,9 @@ class LLMReranker:
     def __call__(self, query: str, candidates: List[Dict]):
         """
         执行重排序逻辑。
+        
+        query 是“当前问题”，prompt 是“候选历史问题（缓存键）”，
+        evaluator 的任务就是判断 query 和每个 prompt 是否语义一致。
         
         Args:
             query: 查询语句。

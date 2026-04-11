@@ -33,3 +33,20 @@ Pro plan we're purchasing, confirmation of the Salesforce integration features, 
 supported payment methods since we want to use ACH transfers, and your data export 
 capabilities for our future migration planning.
 """
+
+# 统一维护：场景标题 + 场景问题。
+# main.py 可直接消费该列表，避免在入口脚本里重复维护标题与 query 的映射关系。
+SCENARIO_RUNS = [
+	{
+		"title": "Scenario 1: Enterprise Platform Evaluation",
+		"query": SCENARIO_1_QUERY,
+	},
+	{
+		"title": "Scenario 2: Implementation Planning",
+		"query": SCENARIO_2_QUERY,
+	},
+	{
+		"title": "Scenario 3: Pre-Purchase Comprehensive Review",
+		"query": SCENARIO_3_QUERY,
+	},
+]

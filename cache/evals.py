@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -17,17 +16,9 @@ try:
 except ImportError:
     tiktoken = None
 
-try:
-    from tavily import TavilyClient
-except ImportError:
-    TavilyClient = None
-
 from cache.vis import plot_metrics, pprint_confusion_matrix
 
 pn.extension()
-
-# 进程内汇率缓存，避免每次成本计算都发起外部请求。
-_FX_CACHE: Dict[str, float] = {"rate": 0.0, "ts": 0.0}
 
 
 def _to_float_env(name: str, default: float) -> float:
@@ -39,118 +30,19 @@ def _to_float_env(name: str, default: float) -> float:
 
 
 def get_display_currency() -> str:
-    """获取成本展示币种（支持 USD/CNY，默认 CNY）。"""
-    c = os.getenv("COST_DISPLAY_CURRENCY", "CNY").strip().upper()
-    return c if c in {"USD", "CNY"} else "CNY"
-
-
-def _extract_first_reasonable_rate(text: str) -> Optional[float]:
-    """从文本中提取第一个看起来像 USD/CNY 的汇率数值。"""
-    if not text:
-        return None
-
-    # 常见美元兑人民币区间一般在 5~10，过滤掉不合理数字。
-    for raw in re.findall(r"\d+(?:\.\d+)?", text):
-        try:
-            v = float(raw)
-        except ValueError:
-            continue
-        if 5.0 <= v <= 10.0:
-            return v
-    return None
-
-
-def fetch_usd_cny_rate_from_tavily() -> Optional[float]:
-    """通过 Tavily Search API 实时查询 USD/CNY 汇率。"""
-    api_key = os.getenv("TAVILY_API_KEY", "").strip()
-    if not api_key or TavilyClient is None:
-        return None
-
-    client = TavilyClient(api_key=api_key)
-    query = "Current USD to CNY exchange rate, return numeric rate only"
-
-    try:
-        # include_answer=True 可优先从聚合回答中提取汇率。
-        resp = client.search(query=query, include_answer=True, max_results=5)
-    except Exception:
-        return None
-
-    # 1) 优先解析 Tavily 的 answer 字段。
-    answer = str(resp.get("answer", "") or "")
-    rate = _extract_first_reasonable_rate(answer)
-    if rate is not None:
-        return rate
-
-    # 2) 回退到检索结果内容拼接解析。
-    texts = []
-    for item in resp.get("results", []) or []:
-        if not isinstance(item, dict):
-            continue
-        texts.append(str(item.get("title", "") or ""))
-        texts.append(str(item.get("content", "") or ""))
-
-    rate = _extract_first_reasonable_rate(" ".join(texts))
-    return rate
-
-
-def get_usd_cny_rate() -> float:
-    """
-    获取 USD->CNY 汇率。
-
-    优先级：
-    1) 显式环境变量 `USD_CNY_RATE`（手工强制覆盖）
-    2) Tavily 实时查询（可通过 `COST_USE_LIVE_FX` 开关）
-    3) 默认回退值 `USD_CNY_RATE_FALLBACK`（默认 7.2）
-    """
-    manual_rate = os.getenv("USD_CNY_RATE", "").strip()
-    if manual_rate:
-        return _to_float_env("USD_CNY_RATE", 7.2)
-
-    use_live = os.getenv("COST_USE_LIVE_FX", "true").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    fallback = _to_float_env("USD_CNY_RATE_FALLBACK", 7.2)
-    if not use_live:
-        return fallback
-
-    # 默认缓存 30 分钟，减少 Tavily 请求频率和成本。
-    ttl_seconds = int(_to_float_env("USD_CNY_RATE_TTL_SECONDS", 1800))
-    now = time.time()
-    cached_rate = float(_FX_CACHE.get("rate", 0.0) or 0.0)
-    cached_ts = float(_FX_CACHE.get("ts", 0.0) or 0.0)
-
-    if cached_rate > 0 and now - cached_ts < ttl_seconds:
-        return cached_rate
-
-    live_rate = fetch_usd_cny_rate_from_tavily()
-    if live_rate is not None:
-        _FX_CACHE["rate"] = live_rate
-        _FX_CACHE["ts"] = now
-        return live_rate
-
-    return fallback
+    """获取成本展示币种（当前固定 CNY）。"""
+    return "CNY"
 
 
 def provider_base_currency(provider: str) -> str:
-    """返回 provider 计费表的基础币种。"""
-    p = (provider or "").lower()
-    if p == "volcengine":
-        return "CNY"
-    return "USD"
+    """返回 provider 计费表的基础币种（当前固定 CNY）。"""
+    return "CNY"
 
 
 def convert_currency(amount: float, from_currency: str, to_currency: str) -> float:
-    """在 USD 与 CNY 间转换金额。"""
+    """币种转换（当前统一 CNY，不做换算）。"""
     if from_currency == to_currency:
         return amount
-    rate = get_usd_cny_rate()
-    if from_currency == "USD" and to_currency == "CNY":
-        return amount * rate
-    if from_currency == "CNY" and to_currency == "USD":
-        return amount / rate
     return amount
 
 
@@ -176,7 +68,7 @@ def load_model_costs() -> Dict[str, Dict[str, Dict[str, float]]]:
 
     Returns:
         结构为 provider -> model -> {input, output} 的字典。
-        其中 input/output 代表“每 1K token 的成本（美元）”。
+        其中 input/output 代表“每 1K token 的成本（人民币）”。
     """
     try:
         # 以当前文件路径为基准定位 model_costs.json，避免工作目录变化导致找不到文件。
@@ -186,12 +78,11 @@ def load_model_costs() -> Dict[str, Dict[str, Dict[str, float]]]:
         with open(costs_file, "r") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        # 降级策略：当文件不存在或格式损坏时，返回一组可用的默认费率。
-        # 这样可以保证评估流程不中断，代价是成本估算精度下降。
+        # 降级策略：当文件不存在或格式损坏时，返回可用的默认 CNY 费率。
         return {
-            "openai": {
-                "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
-                "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
+            "volcengine": {
+                "deepseek-v3-2-251201": {"input": 0.003, "output": 0.0045},
+                "ep-m-20260411093114-9hftc": {"input": 0.0012, "output": 0.0072},
             }
         }
 
@@ -551,7 +442,7 @@ class PerfEval:
         Returns:
             成本统计字典（总成本、分模型成本、均次成本等）。
         """
-        target_currency = (target_currency or get_display_currency()).upper()
+        target_currency = "CNY"
         all_costs = load_model_costs()
         total = 0.0
         by_model: Dict[str, float] = {}
@@ -577,7 +468,6 @@ class PerfEval:
             "calls": len(self.llm_calls),
             "currency": target_currency,
             "display_symbol": currency_symbol(target_currency),
-            "usd_cny_rate": get_usd_cny_rate(),
         }
 
         if self.total_queries:

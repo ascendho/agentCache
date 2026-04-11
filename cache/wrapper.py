@@ -153,7 +153,7 @@ class SemanticCacheWrapper:
         config,
     ) -> "SemanticCacheWrapper":
         """
-        从配置对象创建包装器实例。
+        从配置对象创建包装器实例。把配置字典统一转成“可直接用的缓存对象”，避免到处手写参数。
 
         期望配置中包含：
         - redis_url
@@ -168,7 +168,7 @@ class SemanticCacheWrapper:
             ttl=int(config["ttl_seconds"]),
         )
 
-    def hydrate_from_df(
+    def preload_from_df(
         self,
         df: pd.DataFrame,
         *,
@@ -179,7 +179,7 @@ class SemanticCacheWrapper:
         return_id_map: bool = False,
     ) -> Optional[Dict[str, int]]:
         """
-        从 DataFrame 批量写入缓存。
+        从 DataFrame 批量预加载缓存。
 
         适用于 FAQ/历史问答预热场景；可选返回 question->id 映射，
         便于后续对照分析。
@@ -195,6 +195,26 @@ class SemanticCacheWrapper:
                 question_to_id[q] = idx
             idx += 1
         return question_to_id if return_id_map else None
+
+    def hydrate_from_df(
+        self,
+        df: pd.DataFrame,
+        *,
+        q_col: str = "question",
+        a_col: str = "answer",
+        clear: bool = True,
+        ttl_override: Optional[int] = None,
+        return_id_map: bool = False,
+    ) -> Optional[Dict[str, int]]:
+        """兼容旧命名：等价于 preload_from_df。"""
+        return self.preload_from_df(
+            df,
+            q_col=q_col,
+            a_col=a_col,
+            clear=clear,
+            ttl_override=ttl_override,
+            return_id_map=return_id_map,
+        )
 
     def hydrate_from_pairs(
         self,
