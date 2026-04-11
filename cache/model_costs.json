@@ -69,6 +69,24 @@
       "output": 0.0015
     }
   },
+  "volcengine": {
+    "deepseek-v3-2-251201": {
+      "input": 0.003,
+      "output": 0.0045
+    },
+    "ep-m-20260411093114-9hftc": {
+      "input": 0.0012,
+      "output": 0.0072
+    },
+    "DeepSeek-V3.2": {
+      "input": 0.003,
+      "output": 0.0045
+    },
+    "Doubao-Seed-2.0-lite": {
+      "input": 0.0012,
+      "output": 0.0072
+    }
+  },
   "meta": {
     "llama-3.1-405b": {
       "input": 0.00275,

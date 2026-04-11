@@ -1,36 +1,156 @@
 # 运行指令：python main.py
 
+import csv
+import json
 import logging
+import os
 import warnings
+from datetime import datetime
 from cache.llm_evaluator import set_ark_key
 from redisvl.utils.vectorize import HFTextVectorizer
 from agent import create_knowledge_base_from_texts
 from cache.wrapper import SemanticCacheWrapper
 from cache.config import config
 from cache.faq_data_container import FAQDataContainer
-from langgraph.graph import StateGraph, END
+from cache.evals import PerfEval, format_cost
+from agent.graph import build_workflow
 from agent import (
-    WorkflowState,
-    initialize_agent,
-    decompose_query_node,
-    check_cache_node,
-    research_node,
-    evaluate_quality_node,
-    synthesize_response_node,
-    route_after_cache_check,
-    route_after_quality_evaluation,
     run_agent,
     display_results,
     analyze_agent_results
 )
+from scenarios import SCENARIO_1_QUERY, SCENARIO_2_QUERY, SCENARIO_3_QUERY
+
+
+def _to_bool_env(name: str, default: bool = False) -> bool:
+    """读取布尔环境变量。"""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def export_results(all_results, total_costs, output_dir="output_images"):
+    """
+    将运行结果导出为 CSV + JSON 文件，便于后续分析与归档。
+
+    Returns:
+        导出文件路径字典。
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    summary_csv = os.path.join(output_dir, f"run_summary_{ts}.csv")
+    usage_csv = os.path.join(output_dir, f"llm_usage_{ts}.csv")
+    result_json = os.path.join(output_dir, f"run_results_{ts}.json")
+
+    # 场景级汇总：每条主查询一行。
+    with open(summary_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "scenario_index",
+                "original_query",
+                "sub_questions_count",
+                "cache_hits",
+                "cache_hit_rate",
+                "analysis_llm_calls",
+                "research_llm_calls",
+                "total_latency_ms",
+                "cost",
+                "currency",
+                "final_response",
+            ],
+        )
+        writer.writeheader()
+
+        for idx, result in enumerate(all_results, 1):
+            sub_questions = result.get("sub_questions", [])
+            cache_hits_map = result.get("cache_hits", {})
+            hits = sum(1 for v in cache_hits_map.values() if v)
+            total_sq = len(sub_questions)
+            hit_rate = (hits / total_sq) if total_sq else 0.0
+
+            llm_calls = result.get("llm_calls", {})
+            total_latency = str(result.get("total_latency", "0ms")).replace("ms", "")
+
+            per_perf = PerfEval()
+            for call in result.get("llm_usage", []):
+                per_perf.record_llm_call(
+                    model=call.get("model", "unknown-model"),
+                    provider=call.get("provider", "openai"),
+                    input_tokens=int(call.get("input_tokens", 0) or 0),
+                    output_tokens=int(call.get("output_tokens", 0) or 0),
+                )
+            per_perf.set_total_queries(1)
+            per_cost = per_perf.get_costs()
+
+            writer.writerow(
+                {
+                    "scenario_index": idx,
+                    "original_query": result.get("original_query", ""),
+                    "sub_questions_count": total_sq,
+                    "cache_hits": hits,
+                    "cache_hit_rate": f"{hit_rate:.4f}",
+                    "analysis_llm_calls": llm_calls.get("analysis_llm", 0),
+                    "research_llm_calls": llm_calls.get("research_llm", 0),
+                    "total_latency_ms": total_latency,
+                    "cost": per_cost.get("total_cost", 0.0),
+                    "currency": per_cost.get("currency", total_costs.get("currency", "CNY")),
+                    "final_response": result.get("final_response", ""),
+                }
+            )
+
+    # 调用级明细：每次 LLM 调用一行。
+    with open(usage_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "scenario_index",
+                "provider",
+                "model",
+                "input_tokens",
+                "output_tokens",
+            ],
+        )
+        writer.writeheader()
+
+        for idx, result in enumerate(all_results, 1):
+            for call in result.get("llm_usage", []):
+                writer.writerow(
+                    {
+                        "scenario_index": idx,
+                        "provider": call.get("provider", "openai"),
+                        "model": call.get("model", "unknown-model"),
+                        "input_tokens": int(call.get("input_tokens", 0) or 0),
+                        "output_tokens": int(call.get("output_tokens", 0) or 0),
+                    }
+                )
+
+    payload = {
+        "generated_at": datetime.now().isoformat(),
+        "cost_summary": total_costs,
+        "results": all_results,
+    }
+    with open(result_json, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    return {
+        "summary_csv": summary_csv,
+        "usage_csv": usage_csv,
+        "result_json": result_json,
+    }
 
 def setup_logging():
+    """初始化全局日志配置，统一输出格式。"""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s"
     )
     return logging.getLogger("agentic-workflow")
 
 def create_knowledge_base():
+    """构建演示用知识库并返回索引与向量模型。"""
+    # 这里使用轻量句向量模型，兼顾速度与基本语义检索质量。
     embeddings = HFTextVectorizer(model="sentence-transformers/all-MiniLM-L6-v2")
     raw_docs = [
         "Our premium support plan includes 24/7 phone support, priority email response within 2 hours, and dedicated account management. Premium support costs $49/month.",
@@ -53,91 +173,78 @@ def create_knowledge_base():
     return kb_index, embeddings
 
 def setup_semantic_cache():
+    """初始化语义缓存，并使用 FAQ 数据进行预热。"""
+    # 预热后第一次请求即可命中部分常见问答，便于对比缓存收益。
     cache = SemanticCacheWrapper.from_config(config)
     data = FAQDataContainer()
     cache.hydrate_from_df(data.faq_df, clear=True)
     return cache
 
-def build_workflow(cache, kb_index, embeddings):
-    initialize_agent(cache, kb_index, embeddings)
-    workflow = StateGraph(WorkflowState)
-
-    workflow.add_node("decompose_query", decompose_query_node)
-    workflow.add_node("check_cache", check_cache_node)
-    workflow.add_node("research", research_node)
-    workflow.add_node("evaluate_quality", evaluate_quality_node)
-    workflow.add_node("synthesize", synthesize_response_node)
-
-    workflow.set_entry_point("decompose_query")
-
-    workflow.add_edge("decompose_query", "check_cache")
-    workflow.add_conditional_edges(
-        "check_cache",
-        route_after_cache_check,
-        {
-            "research": "research",
-            "synthesize": "synthesize",
-        },
-    )
-    workflow.add_edge("research", "evaluate_quality")
-    workflow.add_conditional_edges(
-        "evaluate_quality",
-        route_after_quality_evaluation,
-        {
-            "research": "research",
-            "synthesize": "synthesize",
-        },
-    )
-    workflow.add_edge("synthesize", END)
-
-    return workflow.compile()
-
 def main():
+    """程序入口：完成初始化、执行场景测试并统计缓存表现。"""
     warnings.simplefilter("ignore")
     set_ark_key()
     logger = setup_logging()
 
+    # 1) 创建知识库：把原始文本写入向量索引，供后续检索。
     logger.info("Initializing Knowledge Base...")
     kb_index, embeddings = create_knowledge_base()
 
+    # 2) 初始化语义缓存：用于拦截相似问题，减少重复推理成本。
     logger.info("Setting up Semantic Cache...")
     cache = setup_semantic_cache()
 
+    # 3) 组装工作流：节点、路由、工具在这里被编排成可执行图。
     logger.info("Building LangGraph Workflow...")
     workflow_app = build_workflow(cache, kb_index, embeddings)
 
-    # ------------------ Scenarios ------------------
+    # 4) 依次执行三个场景，观察命中率随对话推进是否提升。
+    show_console_results = _to_bool_env("SHOW_CONSOLE_RESULTS", False)
+
     logger.info("Running Scenario 1: Enterprise Platform Evaluation")
-    scenario1_query = """
-    We are evaluating your platform for our enterprise. We need to know the specific
-    API rate limits for the Enterprise plan, your data export options for a 2GB migration,
-    the security compliance standards you meet, and if you support ACH payments.
-    """
-    result1 = run_agent(workflow_app, scenario1_query)
-    display_results(result1)
+    result1 = run_agent(workflow_app, SCENARIO_1_QUERY)
+    if show_console_results:
+        display_results(result1)
 
     logger.info("Running Scenario 2: Implementation Planning")
-    scenario2_query = """
-    We're moving forward with implementation planning. I need to compare API rate limits 
-    between Pro and Enterprise plans to decide on our tier, confirm the Salesforce 
-    integration capabilities we discussed, understand what data export options you provide 
-    for our migration needs, and verify the payment methods including ACH since our 
-    accounting team prefers that for monthly billing.
-    """
-    result2 = run_agent(workflow_app, scenario2_query)
-    display_results(result2)
+    result2 = run_agent(workflow_app, SCENARIO_2_QUERY)
+    if show_console_results:
+        display_results(result2)
 
     logger.info("Running Scenario 3: Pre-Purchase Comprehensive Review")
-    scenario3_query = """
-    Before finalizing our Pro plan purchase, I need complete validation on: your security 
-    compliance framework including SOC2 requirements, the exact API rate limits for the 
-    Pro plan we're purchasing, confirmation of the Salesforce integration features, all 
-    supported payment methods since we want to use ACH transfers, and your data export 
-    capabilities for our future migration planning.
-    """
-    result3 = run_agent(workflow_app, scenario3_query)
-    display_results(result3)
+    result3 = run_agent(workflow_app, SCENARIO_3_QUERY)
+    if show_console_results:
+        display_results(result3)
 
+    # 5) 汇总 LLM token 元数据并做成本评估（支持可配置币种展示）。
+    perf = PerfEval()
+    all_results = [result1, result2, result3]
+    for result in all_results:
+        for call in result.get("llm_usage", []):
+            perf.record_llm_call(
+                model=call.get("model", "unknown-model"),
+                provider=call.get("provider", "openai"),
+                input_tokens=int(call.get("input_tokens", 0) or 0),
+                output_tokens=int(call.get("output_tokens", 0) or 0),
+            )
+    perf.set_total_queries(len(all_results))
+    costs = perf.get_costs()
+
+    logger.info(
+        "Cost Summary | currency=%s | total=%s | per_query=%s | per_call=%s | calls=%d",
+        costs.get("currency", "CNY"),
+        format_cost(costs.get("total_cost", 0.0), costs.get("currency", "CNY")),
+        format_cost(costs.get("avg_cost_per_query", 0.0), costs.get("currency", "CNY")),
+        format_cost(costs.get("avg_cost_per_call", 0.0), costs.get("currency", "CNY")),
+        costs.get("calls", 0),
+    )
+
+    export_paths = export_results(all_results, costs)
+    logger.info("Results exported | summary=%s", export_paths["summary_csv"])
+    logger.info("Results exported | usage=%s", export_paths["usage_csv"])
+    logger.info("Results exported | json=%s", export_paths["result_json"])
+
+    # 6) 输出全局统计并落盘可视化图，用于复盘性能收益。
     logger.info("Analyzing Agent Performance...")
     total_questions, total_cache_hits = analyze_agent_results(
         [result1, result2, result3]

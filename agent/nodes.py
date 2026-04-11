@@ -1,34 +1,83 @@
 """
 Workflow nodes for the deep research agent.
+深度研究 Agent 的工作流节点。
 
 This module contains all the node functions that implement the core
 logic of the agentic workflow with semantic caching.
+该模块包含用于实现带语义缓存的 Agent 工作流核心逻辑的所有节点函数。
 """
 
 import time
 import logging
 import os
 from datetime import datetime
-from typing import List, Dict, Any, Optional, TypedDict
+from typing import List, Dict, Any, Optional, TypedDict, Tuple
 import concurrent.futures
 
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 from .tools import search_knowledge_base
 
-# Configure logger
+# 获取日志记录器
 logger = logging.getLogger("agentic-workflow")
 
-# Global cache variable that will be set by the notebook
+# 全局变量：存储语义缓存实例
 cache = None
 
-# Global LLMs
+# 全局变量：存储单例 LLM 实例，避免重复创建
 _analysis_llm = None
 _research_llm = None
 
 
+def _extract_token_usage(response: Any) -> Tuple[int, int]:
+    """从 LangChain 响应对象中尽力提取输入/输出 token 统计。"""
+    if isinstance(response, dict):
+        usage_meta = response.get("usage_metadata", {})
+        response_meta = response.get("response_metadata", {})
+    else:
+        usage_meta = getattr(response, "usage_metadata", None) or {}
+        response_meta = getattr(response, "response_metadata", None) or {}
+
+    # 常见字段 1：AIMessage.usage_metadata = {input_tokens, output_tokens, total_tokens}
+    in_tokens = int(usage_meta.get("input_tokens", 0) or 0)
+    out_tokens = int(usage_meta.get("output_tokens", 0) or 0)
+
+    if in_tokens > 0 or out_tokens > 0:
+        return in_tokens, out_tokens
+
+    # 常见字段 2：AIMessage.response_metadata.token_usage = {prompt_tokens, completion_tokens}
+    token_usage = response_meta.get("token_usage", {}) if isinstance(response_meta, dict) else {}
+    in_tokens = int(token_usage.get("prompt_tokens", token_usage.get("input_tokens", 0)) or 0)
+    out_tokens = int(token_usage.get("completion_tokens", token_usage.get("output_tokens", 0)) or 0)
+
+    return in_tokens, out_tokens
+
+
+def _append_llm_usage(
+    state: "WorkflowState",
+    model: str,
+    provider: str,
+    response: Any,
+    node: str,
+) -> List[Dict[str, Any]]:
+    """追加一条 LLM 调用记录，供主流程后续成本评估使用。"""
+    usage = list(state.get("llm_usage", []))
+    in_tokens, out_tokens = _extract_token_usage(response)
+    usage.append(
+        {
+            "model": model,
+            "provider": provider,
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+            "node": node,
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
+    return usage
+
+
 def get_analysis_llm():
-    """Get the configured analysis LLM instance."""
+    """获取配置的分析型 LLM 实例（通常使用推理能力更强的模型，如 DeepSeek-V3）。"""
     global _analysis_llm
     if _analysis_llm is None:
         _analysis_llm = ChatOpenAI(
@@ -42,12 +91,11 @@ def get_analysis_llm():
 
 
 def get_research_llm():
-    """Get the configured research LLM instance."""
+    """获取配置的研究型 LLM 实例（用于工具调用、检索结果分析）。"""
     global _research_llm
     if _research_llm is None:
         _research_llm = ChatOpenAI(
-            # model="deepseek-v3-2-251201", 
-            model="doubao-seed-2-0-lite-260215",
+            model="ep-m-20260411093114-9hftc",
             temperature=0.2, 
             max_tokens=400,
             api_key=os.getenv("ARK_API_KEY"),
@@ -57,75 +105,62 @@ def get_research_llm():
 
 class WorkflowMetrics(TypedDict):
     """
-    Consolidated metrics for workflow performance tracking.
+    用于跟踪工作流性能的综合指标字典。
     
-    Groups related metrics for cleaner organization and easier analysis.
+    对相关指标进行分组，结构更清晰并方便后续分析缓存效果与时延。
     """
-    # Performance timing (all in milliseconds)
-    total_latency: float
-    decomposition_latency: float
-    cache_latency: float
-    research_latency: float
-    synthesis_latency: float
+    total_latency: float            # 总时延
+    decomposition_latency: float    # 问题拆解耗时
+    cache_latency: float            # 缓存查询耗时
+    research_latency: float         # 研究检索耗时
+    synthesis_latency: float        # 最终综合耗时
     
-    # Cache effectiveness
-    cache_hit_rate: float  # 0.0 to 1.0
-    cache_hits_count: int
+    cache_hit_rate: float           # 缓存命中率 (0.0 到 1.0)
+    cache_hits_count: int           # 缓存命中个数
     
-    # Research efficiency
-    questions_researched: int
-    total_research_iterations: int
+    questions_researched: int       # 实际进行研究的问题数
+    total_research_iterations: int  # 总研究迭代次数
     
-    # LLM usage for cost tracking
-    llm_calls: Dict[str, int]  # {"analysis_llm": X, "research_llm": Y}
+    llm_calls: Dict[str, int]       # 统计不同 LLM 模型的调用次数
     
-    # Workflow structure
-    sub_question_count: int
-    execution_path: str  # Space-separated path like "decomposed → cache_checked → researched"
+    sub_question_count: int         # 拆解出的子问题总数
+    execution_path: str             # 执行路径描述（例如 "decomposed → cache_checked"）
 
 
 class WorkflowState(TypedDict):
     """
-    State for agentic workflow with semantic caching and quality evaluation.
-
-    Tracks query processing, caching, research iterations, and performance metrics.
+    带语义缓存和质量评估的 Agent 工作流状态定义。
+    
+    该字典贯穿整个 LangGraph 执行过程，存储所有中间结果。
     """
+    original_query: str              # 用户的原始提问
+    sub_questions: List[str]         # 拆解后的子问题列表
+    sub_answers: Dict[str, str]      # 存储每个子问题的答案（可能来自缓存或研究）
+    final_response: Optional[str]    # 最终汇总后的回答
 
-    # Core query management
-    original_query: str
-    sub_questions: List[str]
-    sub_answers: Dict[str, str]
-    final_response: Optional[str]
+    cache_hits: Dict[str, bool]      # 记录每个子问题是否命中缓存
+    cache_confidences: Dict[str, float] # 记录缓存命中的置信度
+    cache_enabled: bool              # 开关：是否启用缓存功能（用于 A/B 测试）
 
-    # Cache management (granular per sub-question)
-    cache_hits: Dict[str, bool]
-    cache_confidences: Dict[str, float]
-    cache_enabled: bool  # Toggle for A/B testing
+    research_iterations: Dict[str, int] # 记录每个子问题已进行的迭代次数
+    max_research_iterations: int        # 最大迭代限制
+    research_quality_scores: Dict[str, float] # 每个子问题的研究质量得分 (0.0-1.0)
+    research_feedback: Dict[str, str]   # 针对质量不合格子问题的改进建议
+    current_research_strategy: Dict[str, str] # 每个子问题当前采用的搜索策略
 
-    # Research iteration and quality control
-    research_iterations: Dict[str, int]  # Track iterations per sub-question
-    max_research_iterations: int
-    research_quality_scores: Dict[str, float]  # Quality score per sub-question
-    research_feedback: Dict[str, str]  # Improvement suggestions per sub-question
-    current_research_strategy: Dict[str, str]  # Current strategy per sub-question
+    execution_path: List[str]        # 节点执行历史列表
+    active_sub_question: Optional[str] # 当前正在处理的子问题名
 
-    # Agent coordination
-    execution_path: List[str]
-    active_sub_question: Optional[str]
+    metrics: WorkflowMetrics         # 性能度量指标
+    timestamp: str                   # 运行时间戳
+    comparison_mode: bool            # 是否为缓存对比模式
 
-    # Consolidated metrics tracking
-    metrics: WorkflowMetrics
-    timestamp: str
-    comparison_mode: bool  # For cache vs no-cache comparison
-
-    # LLM usage tracking for ROI analysis
-    llm_calls: Dict[str, int]  # Track calls to analysis_llm and research_llm
+    llm_calls: Dict[str, int]        # 细粒度统计 LLM 调用次数
+    llm_usage: List[Dict[str, Any]]  # 每次 LLM 调用的 token 元数据记录
 
 
 def initialize_metrics() -> WorkflowMetrics:
-    """
-    Initialize a clean metrics structure with default values.
-    """
+    """初始化默认指标结构。"""
     return {
         "total_latency": 0.0,
         "decomposition_latency": 0.0,
@@ -143,13 +178,11 @@ def initialize_metrics() -> WorkflowMetrics:
 
 
 def update_metrics(current_metrics: WorkflowMetrics, **updates) -> WorkflowMetrics:
-    """
-    Helper to cleanly update metrics with new values.
-    """
+    """以不可变风格更新指标，返回一个新的字典。"""
     updated = current_metrics.copy()
     for key, value in updates.items():
         if key == "llm_calls" and isinstance(value, dict):
-            # Merge LLM call counts
+            # 增量更新 LLM 调用次数
             updated["llm_calls"] = {**updated["llm_calls"], **value}
         else:
             updated[key] = value
@@ -158,10 +191,10 @@ def update_metrics(current_metrics: WorkflowMetrics, **updates) -> WorkflowMetri
 
 def initialize_nodes(semantic_cache):
     """
-    Initialize the nodes with required dependencies.
-
+    初始化节点依赖。
+    
     Args:
-        semantic_cache: The semantic cache instance
+        semantic_cache: 注入语义缓存实例。
     """
     global cache
     cache = semantic_cache
@@ -169,11 +202,11 @@ def initialize_nodes(semantic_cache):
 
 def decompose_question_node(state: WorkflowState) -> WorkflowState:
     """
-    Decompose complex queries into focused, cacheable sub-questions.
-
-    This function uses GPT-4 to intelligently break down user queries into
-    2-4 independent sub-questions that can be cached and researched separately.
-    This maximizes cache hit potential and enables granular caching.
+    节点：将复杂查询分解为专注的、可缓存的子问题。
+    
+    逻辑：使用分析型 LLM 将用户提问拆解为 2-4 个独立的子问题。
+    目的：实现细粒度缓存。例如，“A和B的区别”会被拆为“A是什么”和“B是什么”，
+    下次有人问“A和C的区别”时，“A是什么”就可以直接从缓存读取。
     """
     start_time = time.perf_counter()
     query = state["original_query"]
@@ -181,7 +214,7 @@ def decompose_question_node(state: WorkflowState) -> WorkflowState:
     logger.info(f"🧠 Supervisor: Decomposing query: '{query[:50]}...'")
 
     try:
-        # Intelligent decomposition - only break down when beneficial
+        # 构建拆解提示词
         decomposition_prompt = f"""
         Analyze this customer support query and determine if it needs to be broken down into sub-questions.
         
@@ -200,16 +233,23 @@ def decompose_question_node(state: WorkflowState) -> WorkflowState:
             [HumanMessage(content=decomposition_prompt)]
         )
 
-        # Track LLM usage
+        # 记录一次 LLM 调用计数
         llm_calls = state.get("llm_calls", {}).copy()
         llm_calls["analysis_llm"] = llm_calls.get("analysis_llm", 0) + 1
+        llm_usage = _append_llm_usage(
+            state=state,
+            model="deepseek-v3-2-251201",
+            provider="volcengine",
+            response=response,
+            node="decompose_question_node",
+        )
 
-        # Check if decomposition is needed
         response_content = response.content.strip()
         if response_content == "SINGLE_QUESTION":
             sub_questions = [query]
             logger.info("🧠 Query is simple - keeping as single question")
         else:
+            # 解析 LLM 返回的行，过滤掉序号
             sub_questions = [
                 line.strip()
                 for line in response_content.split("\n")
@@ -218,33 +258,21 @@ def decompose_question_node(state: WorkflowState) -> WorkflowState:
                 and line.strip() != "SINGLE_QUESTION"
             ]
 
-            # Ensure we have reasonable decomposition
+            # 异常处理：如果没有拆出结果，回退到原始提问
             if not sub_questions or len(sub_questions) == 1:
-                sub_questions = [query]  # Fallback to original query
+                sub_questions = [query]
             elif len(sub_questions) > 4:
-                sub_questions = sub_questions[:4]  # Limit complexity
+                sub_questions = sub_questions[:4] # 限制数量，防止任务爆炸
 
-        # Initialize research tracking for each sub-question
+        # 初始化每个子问题的研究状态
         research_iterations = {sq: 0 for sq in sub_questions}
         research_quality_scores = {sq: 0.0 for sq in sub_questions}
         research_feedback = {sq: "" for sq in sub_questions}
         current_research_strategy = {sq: "initial" for sq in sub_questions}
 
-        # Track performance
         decomposition_time = (time.perf_counter() - start_time) * 1000
 
-        if len(sub_questions) == 1:
-            logger.info(
-                f"🧠 Kept as single question in {decomposition_time:.2f}ms"
-            )
-        else:
-            logger.info(
-                f"🧠 Decomposed into {len(sub_questions)} sub-questions in {decomposition_time:.2f}ms"
-            )
-            for i, sq in enumerate(sub_questions, 1):
-                logger.info(f"   {i}. {sq}")
-
-        # Update metrics cleanly
+        # 更新度量指标
         updated_metrics = update_metrics(
             state.get("metrics", initialize_metrics()),
             decomposition_latency=decomposition_time,
@@ -252,7 +280,6 @@ def decompose_question_node(state: WorkflowState) -> WorkflowState:
             llm_calls={"analysis_llm": llm_calls.get("analysis_llm", 0)}
         )
 
-        # Update state immutably
         return {
             **state,
             "sub_questions": sub_questions,
@@ -265,12 +292,13 @@ def decompose_question_node(state: WorkflowState) -> WorkflowState:
             "current_research_strategy": current_research_strategy,
             "execution_path": state["execution_path"] + ["decomposed"],
             "llm_calls": llm_calls,
+            "llm_usage": llm_usage,
             "metrics": updated_metrics,
         }
 
     except Exception as e:
         logger.error(f"❌ Decomposition failed: {e}")
-        # Graceful fallback
+        # 失败回退：将原始问题作为一个子问题处理
         return {
             **state,
             "sub_questions": [query],
@@ -287,36 +315,14 @@ def decompose_question_node(state: WorkflowState) -> WorkflowState:
 
 def check_cache_node(state: WorkflowState) -> WorkflowState:
     """
-    Check semantic cache for each sub-question independently.
+    节点：独立检查每个子问题的语义缓存。
     
-    This node performs semantic similarity lookups against the Redis-based cache
-    for each decomposed sub-question. It serves as a critical decision point in
-    the workflow, determining which questions need research vs. which can be
-    answered from cache.
-    
-    Workflow Position: decompose_query_node → check_cache_node → [research_node OR synthesize_response_node]
-    
-    Key Responsibilities:
-    - Semantic similarity matching using vector embeddings
-    - Confidence score calculation based on vector distance
-    - A/B testing support with cache enable/disable toggle
-    - Comprehensive metrics tracking (hit rates, latency, etc.)
-    - Graceful error handling with fallback to cache misses
-    
-    Cache Strategy:
-    - Each sub-question is checked independently for maximum granularity
-    - Confidence threshold determines cache hit vs miss
-    - Results populate sub_answers for immediate synthesis if all cached
-    - Cache misses trigger research workflow for those specific questions
-    
-    This enables granular caching where individual sub-questions can be
-    cached and reused across different complex queries, maximizing
-    cache efficiency and cost savings.
+    逻辑：遍历所有子问题，在 Redis 语义缓存中进行向量相似度检索。
+    Workflow 位置：拆解节点之后。
+    关键：如果置信度（Confidence）高于阈值，则认为命中，直接获取答案，无需调用昂贵的搜索/LLM。
     """
     if not cache:
-        raise RuntimeError(
-            "Cache not initialized. Please call initialize_nodes() first."
-        )
+        raise RuntimeError("Cache not initialized. Please call initialize_nodes() first.")
 
     start_time = time.perf_counter()
     sub_questions = state.get("sub_questions", [])
@@ -329,12 +335,9 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
     total_hits = 0
 
     try:
-        # Check if caching is enabled (for A/B testing)
+        # 支持全局禁用缓存（用于对比测试）
         if not state.get("cache_enabled", True):
-            logger.info(
-                "🔀 Cache disabled - treating all as cache misses for comparison"
-            )
-            # Update metrics for disabled cache
+            logger.info("🔀 Cache disabled - treating all as cache misses for comparison")
             updated_metrics = update_metrics(
                 state.get("metrics", initialize_metrics()),
                 cache_latency=0.0,
@@ -350,35 +353,30 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
                 "metrics": updated_metrics,
             }
 
-        # Check each item in the semantic cache
+        # 逐个检查子问题缓存
         for sub_question in sub_questions:
+            # 执行语义检索
             cache_results = cache.check(sub_question, num_results=1)
 
             if cache_results.matches:
                 result = cache_results.matches[0]
+                # 计算置信度得分（基于向量距离）
                 confidence = (2.0 - result.vector_distance) / 2.0
                 cache_hits[sub_question] = True
                 cache_confidences[sub_question] = confidence
+                # 直接获取缓存中的答案
                 sub_answers[sub_question] = result.response
                 total_hits += 1
 
-                logger.info(
-                    f"   ✅ Cache HIT: '{sub_question[:40]}...' (confidence: {confidence:.3f})"
-                )
+                logger.info(f"   ✅ Cache HIT: '{sub_question[:40]}...' (confidence: {confidence:.3f})")
             else:
                 cache_hits[sub_question] = False
                 cache_confidences[sub_question] = 0.0
-
                 logger.info(f"   ❌ Cache MISS: '{sub_question[:40]}...'")
 
         cache_latency = (time.perf_counter() - start_time) * 1000
         hit_rate = total_hits / len(sub_questions) if sub_questions else 0
 
-        logger.info(
-            f"🔍 Cache check complete: {total_hits}/{len(sub_questions)} hits ({hit_rate:.1%}) in {cache_latency:.2f}ms"
-        )
-
-        # Update metrics cleanly
         updated_metrics = update_metrics(
             state.get("metrics", initialize_metrics()),
             cache_latency=cache_latency,
@@ -390,6 +388,7 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
             **state,
             "cache_hits": cache_hits,
             "cache_confidences": cache_confidences,
+            # 将缓存命中的答案合并到子问题答案库中
             "sub_answers": {**state.get("sub_answers", {}), **sub_answers},
             "execution_path": state["execution_path"] + ["cache_checked"],
             "metrics": updated_metrics,
@@ -397,7 +396,6 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
 
     except Exception as e:
         logger.error(f"❌ Cache check failed: {e}")
-        # Graceful fallback - assume all cache misses
         return {
             **state,
             "cache_hits": {sq: False for sq in sub_questions},
@@ -408,21 +406,19 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
 
 def synthesize_response_node(state: WorkflowState) -> WorkflowState:
     """
-    Synthesize sub-answers into a coherent, comprehensive response.
-
-    The supervisor agent uses GPT-4 to intelligently combine answers from
-    cached results and research findings into a natural, helpful response.
+    节点：将各部分的子答案汇总成一段连贯、全面的最终回答。
+    
+    逻辑：将缓存命中的答案和新研究出的答案按照原始子问题顺序排列，
+    交给 LLM 进行润色和整合，确保语气自然且直接回答了用户的原始提问。
     """
     start_time = time.perf_counter()
     sub_questions = state.get("sub_questions", [])
     sub_answers = state.get("sub_answers", {})
 
-    logger.info(
-        f"🔗 Supervisor: Synthesizing {len(sub_answers)} answers into final response"
-    )
+    logger.info(f"🔗 Supervisor: Synthesizing {len(sub_answers)} answers into final response")
 
     try:
-        # Build context from sub-questions and answers
+        # 组装 Q&A 对作为上下文
         qa_pairs = []
         for sq in sub_questions:
             if sq in sub_answers:
@@ -432,10 +428,11 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
             logger.warning("⚠️ No answers available for synthesis")
             return {
                 **state,
-                "final_response": "I apologize, but I couldn't find answers to your question. Please try rephrasing or contact support directly.",
+                "final_response": "I apologize, but I couldn't find answers to your question.",
                 "execution_path": state["execution_path"] + ["synthesis_failed"],
             }
 
+        # 最终汇总提示词
         synthesis_prompt = f"""
         You are a helpful customer support assistant. Combine the following question-answer pairs 
         into a single, coherent, and comprehensive response to the user's original query.
@@ -445,11 +442,7 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
         Information gathered:
         {chr(10).join(qa_pairs)}
         
-        Provide a natural, conversational response that:
-        - Directly addresses the user's question
-        - Integrates all relevant information smoothly
-        - Is helpful and actionable
-        - Maintains a professional, friendly tone
+        Provide a natural, conversational response.
         """
 
         messages = [
@@ -460,16 +453,18 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
         response = get_analysis_llm().invoke(messages)
         final_response = response.content.strip()
 
-        # Track LLM usage
         llm_calls = state.get("llm_calls", {}).copy()
         llm_calls["analysis_llm"] = llm_calls.get("analysis_llm", 0) + 1
+        llm_usage = _append_llm_usage(
+            state=state,
+            model="deepseek-v3-2-251201",
+            provider="volcengine",
+            response=response,
+            node="synthesize_response_node",
+        )
 
         synthesis_time = (time.perf_counter() - start_time) * 1000
 
-        logger.info(f"🔗 Response synthesized in {synthesis_time:.2f}ms")
-        logger.info(f"📝 Final response: {final_response[:100]}...")
-
-        # Update metrics cleanly
         updated_metrics = update_metrics(
             state.get("metrics", initialize_metrics()),
             synthesis_latency=synthesis_time,
@@ -481,6 +476,7 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
             "final_response": final_response,
             "execution_path": state["execution_path"] + ["synthesized"],
             "llm_calls": llm_calls,
+            "llm_usage": llm_usage,
             "metrics": updated_metrics,
         }
 
@@ -488,37 +484,35 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
         logger.error(f"❌ Response synthesis failed: {e}")
         return {
             **state,
-            "final_response": "I apologize, but I encountered an error while preparing your response. Please try again or contact support.",
+            "final_response": "I apologize, but I encountered an error while preparing your response.",
             "execution_path": state["execution_path"] + ["synthesis_error"],
         }
 
 
 def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
     """
-    Evaluate the quality and adequacy of research results before synthesis.
-
-    Uses the research LLM to review each research result and determine if it's sufficient
-    to answer the sub-question or if additional research with different strategies
-    is needed. This enables iterative improvement of research quality.
+    节点：在综合答案前评估研究结果的质量和充分性。
+    
+    逻辑：使用 LLM 作为裁判，对每一个新研究出的答案进行打分 (0.0-1.0)。
+    如果得分低于 0.7，会提供具体反馈，触发下一轮研究迭代。
     """
     start_time = time.perf_counter()
     sub_questions = state.get("sub_questions", [])
     sub_answers = state.get("sub_answers", {})
     cache_hits = state.get("cache_hits", {})
 
-    logger.info(
-        f"🎯 Quality Evaluation: Evaluating research quality for {len(sub_answers)} answers"
-    )
+    logger.info(f"🎯 Quality Evaluation: Evaluating research quality for {len(sub_answers)} answers")
 
     quality_scores = state.get("research_quality_scores", {}).copy()
     feedback = state.get("research_feedback", {}).copy()
     needs_more_research = []
+    llm_usage = list(state.get("llm_usage", []))
 
-    # Track LLM usage - initialize outside try block
     llm_calls = state.get("llm_calls", {}).copy()
     research_llm = get_research_llm()
 
     try:
+        # 定义子问题评估函数（用于并行调用）
         def evaluate_sub_question(sub_question, answer, current_iteration):
             evaluation_prompt = f"""
             Evaluate the quality and completeness of this research result for answering the user's question.
@@ -533,7 +527,7 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
             
             Format your response as:
             SCORE: 0.X
-            FEEDBACK: [your feedback or "Adequate" if score >= 0.7]
+            FEEDBACK: [your feedback]
             """
             
             try:
@@ -544,13 +538,17 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
                 
                 score = float(score_line.split("SCORE:")[1].strip())
                 feedback_text = feedback_line.split("FEEDBACK:")[1].strip()
-                return sub_question, "success", score, feedback_text
+                in_tokens, out_tokens = _extract_token_usage(evaluation)
+                return sub_question, "success", score, feedback_text, in_tokens, out_tokens
             except Exception as e:
-                return sub_question, "error", 0.8, f"Evaluation parsing failed: {e}"
+                # 解析失败默认给合格分，防止死循环
+                return sub_question, "error", 0.8, f"Evaluation parsing failed: {e}", 0, 0
 
+        # 并行执行所有子问题的评估
         eval_tasks = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             for sub_question in sub_questions:
+                # 缓存命中的结果默认为满分，无需重复评估
                 if cache_hits.get(sub_question, False):
                     quality_scores[sub_question] = 1.0
                     continue
@@ -563,28 +561,29 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
                 eval_tasks.append(executor.submit(evaluate_sub_question, sub_question, answer, current_iteration))
 
             for future in concurrent.futures.as_completed(eval_tasks):
-                sub_question, status, score, feedback_text = future.result()
+                sub_question, status, score, feedback_text, in_tokens, out_tokens = future.result()
                 llm_calls["research_llm"] = llm_calls.get("research_llm", 0) + 1
+                llm_usage.append(
+                    {
+                        "model": "ep-m-20260411093114-9hftc",
+                        "provider": "volcengine",
+                        "input_tokens": int(in_tokens),
+                        "output_tokens": int(out_tokens),
+                        "node": "evaluate_quality_node",
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
                 
                 quality_scores[sub_question] = score
                 feedback[sub_question] = feedback_text
                 
-                if status == "success":
-                    if score < 0.7:
-                        logger.info(f"   🔄 {sub_question[:40]}... - Score: {score:.2f} (Needs improvement)")
-                    else:
-                        logger.info(f"   ✅ {sub_question[:40]}... - Score: {score:.2f} - Adequate")
+                if score < 0.7:
+                    logger.info(f"   🔄 {sub_question[:40]}... - Score: {score:.2f} (Needs improvement)")
                 else:
-                    logger.warning(f"Failed to parse evaluation for {sub_question} - assuming adequate")
+                    logger.info(f"   ✅ {sub_question[:40]}... - Score: {score:.2f} - Adequate")
 
         evaluation_time = (time.perf_counter() - start_time) * 1000
 
-        logger.info(f"🎯 Quality evaluation complete in {evaluation_time:.2f}ms")
-        logger.info(
-            f"📊 {len(needs_more_research)} sub-questions need additional research"
-        )
-
-        # Update LLM usage in metrics
         updated_metrics = update_metrics(
             state.get("metrics", initialize_metrics()),
             llm_calls={"research_llm": llm_calls.get("research_llm", 0)}
@@ -596,18 +595,16 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
             "research_feedback": feedback,
             "execution_path": state["execution_path"] + ["quality_evaluated"],
             "llm_calls": llm_calls,
+            "llm_usage": llm_usage,
             "metrics": updated_metrics,
         }
 
     except Exception as e:
         logger.error(f"❌ Quality evaluation failed: {e}")
-        # Graceful fallback - assume all research is adequate
         return {
             **state,
             "research_quality_scores": {sq: 0.8 for sq in sub_questions},
-            "research_feedback": {
-                sq: "Evaluation failed - assuming adequate" for sq in sub_questions
-            },
+            "research_feedback": {sq: "Evaluation failed" for sq in sub_questions},
             "execution_path": state["execution_path"] + ["evaluation_failed"],
             "llm_calls": llm_calls,
         }
@@ -615,11 +612,11 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
 
 def research_node(state: WorkflowState) -> WorkflowState:
     """
-    Research with strategy adaptation and iteration support.
-
-    This node handles sub-questions that need research, adapting search strategies
-    based on previous iteration feedback. Supports multiple research iterations
-    with different approaches based on quality evaluation feedback.
+    节点：执行研究逻辑，支持策略调整和迭代。
+    
+    逻辑：仅处理“缓存未命中”的子问题。
+    使用 create_react_agent 创建一个带工具调用能力的智能体，调用 search_knowledge_base 工具从 Redis 中检索。
+    如果是第二轮迭代，会结合上一轮的反馈（Feedback）生成更深入的搜索指令。
     """
     start_time = time.perf_counter()
     cache_hits = state.get("cache_hits", {})
@@ -629,12 +626,13 @@ def research_node(state: WorkflowState) -> WorkflowState:
     feedback = state.get("research_feedback", {})
     questions_researched = 0
 
-    # Track LLM usage
     llm_calls = state.get("llm_calls", {}).copy()
+    llm_usage = list(state.get("llm_usage", []))
 
     from langgraph.prebuilt import create_react_agent
 
     research_llm = get_research_llm()
+    # 构造 ReAct 智能体，赋予其搜索知识库的能力
     researcher_agent = create_react_agent(
         model=research_llm, tools=[search_knowledge_base]
     )
@@ -642,54 +640,62 @@ def research_node(state: WorkflowState) -> WorkflowState:
     logger.info("🔬 Research: Starting investigation with strategy adaptation")
 
     try:
+        # 并行处理每个需要研究的子问题
         def process_research(sub_question):
             current_iteration = research_iterations.get(sub_question, 0)
             strategy = current_strategies.get(sub_question, "initial")
-            logger.info(f"🔍 Researching: '{sub_question[:50]}...' (iteration {current_iteration + 1}, strategy: {strategy})")
+            logger.info(f"🔍 Researching: '{sub_question[:50]}...' (iteration {current_iteration + 1})")
             
             research_prompt = sub_question
+            # 如果是迭代改善阶段，注入质量评估的反馈
             if current_iteration > 0 and feedback.get(sub_question):
                 research_prompt = f"""
                 Previous research was insufficient. Feedback: {feedback[sub_question]}
                 Original question: {sub_question}
-                Please research this more thoroughly, focusing on the specific improvements mentioned in the feedback.
-                Use different search terms and approaches than before.
+                Please research this more thoroughly, focusing on the specific improvements mentioned.
                 """
             
+            # 调用 ReAct Agent 进行研究
             research_result = researcher_agent.invoke({"messages": [HumanMessage(content=research_prompt)]})
             
             if research_result and "messages" in research_result:
-                answer = research_result["messages"][-1].content
-                return sub_question, "success", answer, current_iteration
+                last_msg = research_result["messages"][-1]
+                answer = last_msg.content
+                in_tokens, out_tokens = _extract_token_usage(last_msg)
+                return sub_question, "success", answer, current_iteration, in_tokens, out_tokens
             else:
-                return sub_question, "failure", "I couldn't find specific information about this.", current_iteration
+                return sub_question, "failure", "No info found.", current_iteration, 0, 0
 
         tasks = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             for sub_question, is_cached in cache_hits.items():
-                if not is_cached:
+                if not is_cached: # 关键：跳过缓存已命中的问题
                     tasks.append(executor.submit(process_research, sub_question))
             
             for future in concurrent.futures.as_completed(tasks):
-                sub_question, status, answer, current_iteration = future.result()
+                sub_question, status, answer, current_iteration, in_t, out_t = future.result()
                 llm_calls["research_llm"] = llm_calls.get("research_llm", 0) + 1
+
+                llm_usage.append(
+                    {
+                        "model": "ep-m-20260411093114-9hftc",
+                        "provider": "volcengine",
+                        "input_tokens": int(in_t),
+                        "output_tokens": int(out_t),
+                        "node": "research_node",
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
                 if status == "success":
                     sub_answers[sub_question] = answer
                     questions_researched += 1
                     research_iterations[sub_question] = current_iteration + 1
                     current_strategies[sub_question] = f"iteration_{current_iteration + 1}"
-                    logger.info(f"   ✅ Research complete (iteration {current_iteration + 1}): '{answer[:60]}...'")
                 else:
-                    logger.warning(f"   ❌ No response from researcher for: {sub_question}")
                     sub_answers[sub_question] = answer
 
         research_time = (time.perf_counter() - start_time) * 1000
 
-        logger.info(
-            f"🔬 Research complete: {questions_researched} questions researched in {research_time:.2f}ms"
-        )
-
-        # Update metrics cleanly
         updated_metrics = update_metrics(
             state.get("metrics", initialize_metrics()),
             research_latency=research_time,
@@ -705,18 +711,12 @@ def research_node(state: WorkflowState) -> WorkflowState:
             "current_research_strategy": current_strategies,
             "execution_path": state["execution_path"] + ["researched"],
             "llm_calls": llm_calls,
+            "llm_usage": llm_usage,
             "metrics": updated_metrics,
         }
 
     except Exception as e:
         logger.error(f"❌ Research failed: {e}")
-        # Provide fallback answers for failed research
-        for sub_question, is_cached in cache_hits.items():
-            if not is_cached and sub_question not in sub_answers:
-                sub_answers[sub_question] = (
-                    "I encountered an error while researching this question. Please contact support for assistance."
-                )
-
         return {
             **state,
             "sub_answers": sub_answers,
@@ -727,24 +727,11 @@ def research_node(state: WorkflowState) -> WorkflowState:
 
 def decompose_query_node(state: WorkflowState) -> WorkflowState:
     """
-    Decompose complex queries into focused, cacheable sub-questions.
+    工作流入口节点：将复杂问题拆分为可缓存、可并行处理的子问题。
     
-    This node serves as the entry point of the workflow, intelligently breaking down
-    user queries into 2-4 independent sub-questions that can be cached and researched 
-    separately. This maximizes cache hit potential and enables granular caching.
-    
-    Workflow Position: Entry point → check_cache_node
-    
-    The decomposition strategy:
-    - Simple queries stay as single questions
-    - Complex queries are broken into focused sub-questions
-    - Each sub-question is designed to be independently cacheable
-    - Maintains comprehensive metrics for performance tracking
+    这是 decompose_question_node 的别名或包装函数，作为 Graph 定义中的入口。
     """
     logger.info("🧠 Decomposing query...")
-    
-    # Delegate to the existing decomposition logic
     state = decompose_question_node(state)
-    
     logger.info("🧠 Query decomposition complete")
     return state

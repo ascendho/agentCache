@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -16,26 +17,177 @@ try:
 except ImportError:
     tiktoken = None
 
+try:
+    from tavily import TavilyClient
+except ImportError:
+    TavilyClient = None
+
 from cache.vis import plot_metrics, pprint_confusion_matrix
 
 pn.extension()
 
+# 进程内汇率缓存，避免每次成本计算都发起外部请求。
+_FX_CACHE: Dict[str, float] = {"rate": 0.0, "ts": 0.0}
+
+
+def _to_float_env(name: str, default: float) -> float:
+    """从环境变量读取浮点数，解析失败时返回默认值。"""
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def get_display_currency() -> str:
+    """获取成本展示币种（支持 USD/CNY，默认 CNY）。"""
+    c = os.getenv("COST_DISPLAY_CURRENCY", "CNY").strip().upper()
+    return c if c in {"USD", "CNY"} else "CNY"
+
+
+def _extract_first_reasonable_rate(text: str) -> Optional[float]:
+    """从文本中提取第一个看起来像 USD/CNY 的汇率数值。"""
+    if not text:
+        return None
+
+    # 常见美元兑人民币区间一般在 5~10，过滤掉不合理数字。
+    for raw in re.findall(r"\d+(?:\.\d+)?", text):
+        try:
+            v = float(raw)
+        except ValueError:
+            continue
+        if 5.0 <= v <= 10.0:
+            return v
+    return None
+
+
+def fetch_usd_cny_rate_from_tavily() -> Optional[float]:
+    """通过 Tavily Search API 实时查询 USD/CNY 汇率。"""
+    api_key = os.getenv("TAVILY_API_KEY", "").strip()
+    if not api_key or TavilyClient is None:
+        return None
+
+    client = TavilyClient(api_key=api_key)
+    query = "Current USD to CNY exchange rate, return numeric rate only"
+
+    try:
+        # include_answer=True 可优先从聚合回答中提取汇率。
+        resp = client.search(query=query, include_answer=True, max_results=5)
+    except Exception:
+        return None
+
+    # 1) 优先解析 Tavily 的 answer 字段。
+    answer = str(resp.get("answer", "") or "")
+    rate = _extract_first_reasonable_rate(answer)
+    if rate is not None:
+        return rate
+
+    # 2) 回退到检索结果内容拼接解析。
+    texts = []
+    for item in resp.get("results", []) or []:
+        if not isinstance(item, dict):
+            continue
+        texts.append(str(item.get("title", "") or ""))
+        texts.append(str(item.get("content", "") or ""))
+
+    rate = _extract_first_reasonable_rate(" ".join(texts))
+    return rate
+
+
+def get_usd_cny_rate() -> float:
+    """
+    获取 USD->CNY 汇率。
+
+    优先级：
+    1) 显式环境变量 `USD_CNY_RATE`（手工强制覆盖）
+    2) Tavily 实时查询（可通过 `COST_USE_LIVE_FX` 开关）
+    3) 默认回退值 `USD_CNY_RATE_FALLBACK`（默认 7.2）
+    """
+    manual_rate = os.getenv("USD_CNY_RATE", "").strip()
+    if manual_rate:
+        return _to_float_env("USD_CNY_RATE", 7.2)
+
+    use_live = os.getenv("COST_USE_LIVE_FX", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    fallback = _to_float_env("USD_CNY_RATE_FALLBACK", 7.2)
+    if not use_live:
+        return fallback
+
+    # 默认缓存 30 分钟，减少 Tavily 请求频率和成本。
+    ttl_seconds = int(_to_float_env("USD_CNY_RATE_TTL_SECONDS", 1800))
+    now = time.time()
+    cached_rate = float(_FX_CACHE.get("rate", 0.0) or 0.0)
+    cached_ts = float(_FX_CACHE.get("ts", 0.0) or 0.0)
+
+    if cached_rate > 0 and now - cached_ts < ttl_seconds:
+        return cached_rate
+
+    live_rate = fetch_usd_cny_rate_from_tavily()
+    if live_rate is not None:
+        _FX_CACHE["rate"] = live_rate
+        _FX_CACHE["ts"] = now
+        return live_rate
+
+    return fallback
+
+
+def provider_base_currency(provider: str) -> str:
+    """返回 provider 计费表的基础币种。"""
+    p = (provider or "").lower()
+    if p == "volcengine":
+        return "CNY"
+    return "USD"
+
+
+def convert_currency(amount: float, from_currency: str, to_currency: str) -> float:
+    """在 USD 与 CNY 间转换金额。"""
+    if from_currency == to_currency:
+        return amount
+    rate = get_usd_cny_rate()
+    if from_currency == "USD" and to_currency == "CNY":
+        return amount * rate
+    if from_currency == "CNY" and to_currency == "USD":
+        return amount / rate
+    return amount
+
+
+def currency_symbol(currency: str) -> str:
+    """返回币种符号。"""
+    return "¥" if currency == "CNY" else "$"
+
+
+def format_cost(value: float, currency: Optional[str] = None) -> str:
+    """格式化金额字符串，自动按币种展示符号与精度。"""
+    c = (currency or get_display_currency()).upper()
+    sym = currency_symbol(c)
+    if value < 0.001:
+        return f"{sym}{value:.6f}"
+    if value < 1:
+        return f"{sym}{value:.4f}"
+    return f"{sym}{value:.2f}"
+
 
 def load_model_costs() -> Dict[str, Dict[str, Dict[str, float]]]:
     """
-    Load model costs from JSON file.
+    从本地 JSON 文件加载模型计费信息。
 
     Returns:
-        Dictionary with provider -> model -> {input, output} cost structure
+        结构为 provider -> model -> {input, output} 的字典。
+        其中 input/output 代表“每 1K token 的成本（美元）”。
     """
     try:
+        # 以当前文件路径为基准定位 model_costs.json，避免工作目录变化导致找不到文件。
         current_dir = os.path.dirname(os.path.abspath(__file__))
         costs_file = os.path.join(current_dir, "model_costs.json")
 
         with open(costs_file, "r") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        # Fallback to basic OpenAI costs
+        # 降级策略：当文件不存在或格式损坏时，返回一组可用的默认费率。
+        # 这样可以保证评估流程不中断，代价是成本估算精度下降。
         return {
             "openai": {
                 "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
@@ -46,33 +198,35 @@ def load_model_costs() -> Dict[str, Dict[str, Dict[str, float]]]:
 
 def count_tokens(text: str, model: str = "gpt-4o-mini") -> int:
     """
-    Count tokens in text using tiktoken for accurate counting.
+    统计文本 token 数量。
+
+    优先使用 tiktoken 精确计数；若环境未安装或编码获取失败，
+    则采用“按单词数近似折算”的方式兜底。
 
     Args:
-        text: Text to count tokens for
-        model: Model name to determine encoding (defaults to gpt-4o-mini)
+        text: 待统计文本。
+        model: 模型名，用于选择对应编码规则（默认 gpt-4o-mini）。
 
     Returns:
-        Number of tokens in the text
+        文本 token 数。
     """
     if tiktoken is None:
-        # Fallback to rough estimation if tiktoken not available
+        # 经验近似：英文场景下 token 数通常略高于单词数。
         return len(text.split()) * 1.3
 
     try:
-        # Map model names to tiktoken encodings
+        # 不同模型家族可能使用不同编码；这里做前缀匹配选择编码。
         model_encodings = {
             "gpt-4o": "o200k_base",
             "gpt-4o-mini": "o200k_base",
             "gpt-4": "cl100k_base",
             "gpt-4-turbo": "cl100k_base",
             "gpt-3.5-turbo": "cl100k_base",
-            "claude": "cl100k_base",  # Approximation
-            "gemini": "cl100k_base",  # Approximation
+            "claude": "cl100k_base",  # 近似映射，仅用于估算
+            "gemini": "cl100k_base",  # 近似映射，仅用于估算
         }
 
-        # Get the appropriate encoding
-        encoding_name = "o200k_base"  # Default for newer models
+        encoding_name = "o200k_base"  # 对较新模型使用该编码作为默认值
         for model_prefix, enc in model_encodings.items():
             if model_prefix in model.lower():
                 encoding_name = enc
@@ -82,36 +236,37 @@ def count_tokens(text: str, model: str = "gpt-4o-mini") -> int:
         return len(encoding.encode(text))
 
     except Exception:
-        # Fallback to estimation if tiktoken fails
+        # 任何异常都回退近似算法，确保调用方总能拿到可用结果。
         return int(len(text.split()) * 1.3)
 
 
 def get_model_cost(provider: str, model: str) -> Dict[str, float]:
     """
-    Get cost per 1K tokens for a specific model.
+    获取指定模型的每 1K token 费率。
 
     Args:
-        provider: Provider name (e.g., "openai", "anthropic")
-        model: Model name (e.g., "gpt-4o-mini")
+        provider: 提供商名称（如 openai、anthropic）。
+        model: 模型名称（如 gpt-4o-mini）。
 
     Returns:
-        Dictionary with "input" and "output" costs per 1K tokens
+        含 input/output 费率的字典。
     """
     costs = load_model_costs()
 
     if provider in costs and model in costs[provider]:
         return costs[provider][model]
 
-    # Try to find model across all providers
+    # 兼容某些调用方 provider 传错或为空的情况：尝试跨 provider 查找模型名。
     for p, models in costs.items():
         if model in models:
             return models[model]
 
-    # Fallback to reasonable defaults
+    # 最后兜底默认值，避免 KeyError 或返回空结构。
     return {"input": 0.001, "output": 0.002}
 
 
 def _harmonic_mean(a, b):
+    # 调和平均值更强调“短板效应”，适合把两个指标做平衡评分。
     if a + b == 0:
         return 0
     return 2 * a * b / (a + b) if (a + b) > 0 else 0
@@ -121,7 +276,6 @@ class CacheEvaluator:
     true_labels: List[bool]
     cache_results: List[CacheResults]
 
-    # changes the interpretation of true_labels
     is_from_full_retrieval: bool
 
     @classmethod
@@ -136,6 +290,7 @@ class CacheEvaluator:
         self.is_from_full_retrieval = is_from_full_retrieval
 
     def matches_df(self) -> pd.DataFrame:
+        # 将评估结果扁平化为 DataFrame，方便排查单条 query 的匹配情况。
         query = [r.query for r in self.cache_results]
         match = [
             r.matches[0].prompt if len(r.matches) > 0 else None
@@ -157,7 +312,8 @@ class CacheEvaluator:
         )
 
     def get_metrics(self, distance_threshold: Optional[float] = None):
-        # dont apply threshold filtering if no threshold is applied
+        # 阈值语义：只保留向量距离 < T 的候选。
+        # 当 T=None 时使用 1（基本不过滤）。
         T = 1 if distance_threshold is None else distance_threshold
 
         has_retrieval = np.array(
@@ -168,9 +324,11 @@ class CacheEvaluator:
         )
         true_labels = np.array(self.true_labels)
         if self.is_from_full_retrieval:
-            # Switch interpretation of matches that are thresholded out
+            # 在 full retrieval 模式下，若阈值过滤后无召回，会改变标签解释方式：
+            # 这一步用于修正“无候选”带来的统计偏差。
             true_labels[~has_retrieval] = ~true_labels[~has_retrieval]
 
+        # 这里采用“是否有检索结果”作为预测正负类的依据来构造混淆矩阵。
         tp = has_retrieval & true_labels
         tn = (~has_retrieval) & true_labels
         fp = has_retrieval & (~true_labels)
@@ -182,6 +340,7 @@ class CacheEvaluator:
         TN = sum(tn)
 
         confusion_matrix = np.array([[TN, FP], [FN, TP]])
+        # cache_hit_rate 定义为“有返回候选”的比例（不区分真伪命中）。
         cache_hit_rate = (TP + FP) / (TP + FP + FN + TN)
         precision = TP / (TP + FP) if (TP + FP) > 0 else 1
         recall = TP / (TP + FN) if (TP + FN) > 0 else 1
@@ -193,6 +352,7 @@ class CacheEvaluator:
             "f1_score": 2 * TP / (2 * TP + FP + FN),
             "accuracy": (TP + TN) / (TP + TN + FP + FN),
             "utility": _harmonic_mean(precision, cache_hit_rate),
+            # confusion_mask 保存逐样本布尔掩码，便于后续定位误判样本。
             "confusion_matrix": confusion_matrix,
             "confusion_mask": np.array([[tn, fp], [fn, tp]]),
         }
@@ -209,6 +369,7 @@ class CacheEvaluator:
             "f1_score",
         ],
     ):
+        # 在阈值区间内扫描多个采样点，寻找目标指标最优阈值。
         thresholds = []
         all_metrics = {}
         for threshold in np.linspace(*threshold_span, num_samples):
@@ -253,6 +414,7 @@ class CacheEvaluator:
         title="Evaluation report",
         orientation="horizontal",
     ):
+        # 统一输出指标表与混淆矩阵，便于横向对比不同阈值。
         metrics = self.get_metrics(distance_threshold)
 
         metrics_table = (
@@ -275,13 +437,16 @@ class CacheEvaluator:
 
 class PerfEval:
     def __init__(self):
-        self.durations = []  # seconds
+        # durations 记录每个阶段耗时（秒）。
+        self.durations = []
         self.durations_by_label: Dict[str, List[float]] = {}
         self.last_time: Optional[float] = None
         self.total_queries: Optional[int] = None
-        self.llm_calls: List[Dict] = []  # {model, in_tokens, out_tokens}
+        # llm_calls 中每项结构：{model, provider, in, out}
+        self.llm_calls: List[Dict] = []
 
     def __enter__(self):
+        # 进入上下文时清空旧状态，适合一次完整实验用一次上下文。
         self.last_time = time.time()
         self.durations = []
         self.durations_by_label = {}
@@ -292,12 +457,14 @@ class PerfEval:
         self.last_time = time.time()
 
     def tick(self, label: Optional[str] = None):
+        # tick 记录“从上一次 start/tick 到当前”的时间差。
         now = time.time()
         if self.last_time is None:
             self.last_time = now
         dt = now - self.last_time
         self.durations.append(dt)
         if label:
+            # 通过标签拆分耗时，有助于区分 cache_hit、llm_call 等阶段。
             self.durations_by_label.setdefault(label, []).append(dt)
         self.last_time = now
 
@@ -305,25 +472,34 @@ class PerfEval:
         pass
 
     def set_total_queries(self, n: int):
+        # 记录查询总数，用于计算 avg_cost_per_query 等全局均值指标。
         self.total_queries = n
 
     def record_llm_call(
-        self, model: str, input_text: str, output_text: str, provider: str = "openai"
+        self,
+        model: str,
+        input_text: str = "",
+        output_text: str = "",
+        provider: str = "openai",
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
     ):
         """
-        Record an LLM call with automatic token counting if texts are provided.
+        记录一次 LLM 调用，并自动统计输入/输出 token。
 
         Args:
-            model: Model name (e.g., "gpt-4o-mini")
-            input_text: Input text to count tokens for (optional if input_tokens provided)
-            output_text: Output text to count tokens for (optional if output_tokens provided)
-            provider: Provider name for cost lookup (default: "openai")
+            model: 模型名称（如 "gpt-4o-mini"）。
+            input_text: 输入文本（当未直接给 input_tokens 时用于估算）。
+            output_text: 输出文本（当未直接给 output_tokens 时用于估算）。
+            provider: 模型提供商名，用于查询费率（默认 "openai"）。
+            input_tokens: 直接指定输入 token（优先级高于 input_text 估算）。
+            output_tokens: 直接指定输出 token（优先级高于 output_text 估算）。
         """
-        # Count tokens if not provided
-        input_tokens = count_tokens(input_text, model)
-        output_tokens = count_tokens(output_text, model)
+        if input_tokens is None:
+            input_tokens = count_tokens(input_text, model)
+        if output_tokens is None:
+            output_tokens = count_tokens(output_text, model)
 
-        # Store the call with provider info for cost calculation
         self.llm_calls.append(
             {
                 "model": model,
@@ -334,6 +510,7 @@ class PerfEval:
         )
 
     def _stats(self, values: List[float]):
+        # 统一统计口径：返回均值、分位数与平均吞吐（qps）。
         if len(values) == 0:
             return {
                 "count": 0,
@@ -367,13 +544,14 @@ class PerfEval:
                 by_label[lbl] = self._stats(self.durations_by_label.get(lbl, []))
         return {"overall": overall, "by_label": by_label}
 
-    def get_costs(self):
+    def get_costs(self, target_currency: Optional[str] = None):
         """
-        Calculate costs for all LLM calls.
+        汇总所有 LLM 调用成本，并给出分模型明细。
 
         Returns:
-            Dictionary with cost breakdown
+            成本统计字典（总成本、分模型成本、均次成本等）。
         """
+        target_currency = (target_currency or get_display_currency()).upper()
         all_costs = load_model_costs()
         total = 0.0
         by_model: Dict[str, float] = {}
@@ -382,11 +560,13 @@ class PerfEval:
             model = call["model"]
             provider = call.get("provider", "openai")
             rates = get_model_cost(provider, model)
+            base_currency = provider_base_currency(provider)
 
-            # Calculate cost (rates are per 1K tokens)
-            input_cost = (call["in"] / 1000.0) * rates.get("input", 0.0)
-            output_cost = (call["out"] / 1000.0) * rates.get("output", 0.0)
-            call_cost = input_cost + output_cost
+            # 成本换算：token 数 / 1000 * 单价。
+            input_cost_base = (call["in"] / 1000.0) * rates.get("input", 0.0)
+            output_cost_base = (call["out"] / 1000.0) * rates.get("output", 0.0)
+            call_cost_base = input_cost_base + output_cost_base
+            call_cost = convert_currency(call_cost_base, base_currency, target_currency)
 
             by_model[model] = by_model.get(model, 0.0) + call_cost
             total += call_cost
@@ -395,6 +575,9 @@ class PerfEval:
             "total_cost": total,
             "by_model": by_model,
             "calls": len(self.llm_calls),
+            "currency": target_currency,
+            "display_symbol": currency_symbol(target_currency),
+            "usd_cny_rate": get_usd_cny_rate(),
         }
 
         if self.total_queries:
@@ -412,29 +595,26 @@ class PerfEval:
         show_cost_analysis: bool = True,
     ):
         """
-        Create a comprehensive performance dashboard visualization.
+        绘制综合性能看板（命中分布、时延对比、成本、摘要）。
 
         Args:
-            labels: List of timing labels to include in metrics (auto-detected if None)
-            title: Dashboard title
-            figsize: Figure size (width, height)
-            show_cost_analysis: Whether to include cost analysis panel
+            labels: 需要纳入分析的耗时标签；为空时自动从已记录标签推断。
+            title: 图表标题。
+            figsize: 画布大小（宽, 高）。
+            show_cost_analysis: 是否显示成本面板。
         """
-        # Auto-detect available labels if not provided
         if labels is None:
             labels = list(self.durations_by_label.keys())
 
-        # Get metrics and costs
         metrics = self.get_metrics(labels=labels)
         costs = self.get_costs()
 
-        # Set up clean plotting style
+        # 统一图表风格，保证不同实验图的观感一致。
         plt.style.use("seaborn-v0_8-whitegrid")
         plt.rcParams.update(
             {"font.size": 10, "axes.titlesize": 12, "axes.labelsize": 10}
         )
 
-        # Create clean 2x2 grid layout
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=figsize)
         fig.suptitle(title, fontsize=14, fontweight="bold", y=0.98)
 
@@ -452,28 +632,24 @@ class PerfEval:
         plt.show()
 
     def _plot_hit_miss_distribution(self, ax, labels, metrics):
-        """Plot cache hit/miss distribution as pie chart."""
-        # Look for cache-related labels
+        """绘制缓存命中/未命中分布饼图。"""
         cache_hits = 0
         cache_misses = 0
 
-        # Count actual queries that resulted in hits vs misses
-        # Each LLM call represents a cache miss
         for label in labels:
             count = metrics["by_label"].get(label, {}).get("count", 0)
 
+            # 约定：标签名含 hit 视为命中，含 llm 视为未命中后触发大模型。
             if "hit" in label.lower():
                 cache_hits += count
             elif "llm" in label.lower():
-                # LLM calls represent cache misses
                 cache_misses += count
 
-        # If we can't detect hits/misses properly, calculate from total queries
         if cache_hits == 0 and cache_misses == 0:
+            # 若没有标签可推断，则退化为“全部视作 miss”。
             total_queries = self.total_queries or len(self.durations)
             cache_misses = total_queries
 
-        # Ensure we have some data to plot
         if cache_hits + cache_misses > 0:
             sizes = [cache_hits, cache_misses]
             labels_pie = [
@@ -493,7 +669,6 @@ class PerfEval:
                 textprops={"fontsize": 10},
             )
 
-            # Clean up text styling
             for autotext in autotexts:
                 autotext.set_color("white")
                 autotext.set_fontweight("bold")
@@ -512,12 +687,12 @@ class PerfEval:
             ax.set_title("Cache Effectiveness", fontweight="bold")
 
     def _plot_latency_comparison(self, ax, labels, metrics):
-        """Plot latency comparison as clean bar chart."""
+        """绘制关键阶段时延对比柱状图。"""
         latency_data = []
         latency_labels = []
         colors = []
 
-        # Only show the most relevant metrics for clarity
+        # 只保留有数据的标签，避免画空柱。
         relevant_labels = []
         for label in labels:
             if label in metrics["by_label"] and metrics["by_label"][label]["count"] > 0:
@@ -528,7 +703,6 @@ class PerfEval:
             latency = metrics["by_label"][label]["average_latency"]
             latency_data.append(latency)
 
-            # Clean up label names
             if "hit" in label.lower():
                 latency_labels.append(f"Cache Hit\n{latency:.1f}ms")
                 colors.append("#2ecc71")
@@ -546,11 +720,9 @@ class PerfEval:
             ax.set_title("Response Time Comparison", fontweight="bold", pad=20)
             ax.set_ylabel("Latency (ms)", fontweight="bold")
 
-            # Clean styling
             ax.grid(True, alpha=0.3, axis="y")
             ax.set_axisbelow(True)
 
-            # Set y-axis to show meaningful scale
             ax.set_ylim(0, max(latency_data) * 1.1)
         else:
             ax.text(
@@ -565,10 +737,9 @@ class PerfEval:
             ax.set_title("Response Time Comparison", fontweight="bold")
 
     def _plot_cost_analysis(self, ax, costs):
-        """Plot cost analysis as clean bar chart with integrated labels."""
+        """绘制成本分析柱状图（单次查询与总成本）。"""
         cost_data = [costs.get("avg_cost_per_query", 0), costs.get("total_cost", 0)]
 
-        # Format cost values for display
         avg_cost_str = (
             f"${cost_data[0]:.6f}" if cost_data[0] < 0.001 else f"${cost_data[0]:.4f}"
         )
@@ -576,29 +747,24 @@ class PerfEval:
             f"${cost_data[1]:.6f}" if cost_data[1] < 0.001 else f"${cost_data[1]:.4f}"
         )
 
-        # Create labels with cost values integrated
         cost_labels = [f"Per Query\n{avg_cost_str}", f"Total Cost\n{total_cost_str}"]
 
         bars = ax.bar(cost_labels, cost_data, color=["#3498db", "#e74c3c"], alpha=0.8)
         ax.set_title("Cost Analysis", fontweight="bold", pad=20)
         ax.set_ylabel("Cost (USD)", fontweight="bold")
 
-        # Clean up the plot
         ax.grid(True, alpha=0.3, axis="y")
         ax.set_axisbelow(True)
 
-        # Set y-axis to show meaningful scale
         if max(cost_data) > 0:
             ax.set_ylim(0, max(cost_data) * 1.1)
 
     def _plot_performance_summary(self, ax, labels, metrics, costs):
-        """Plot clean performance summary as text panel."""
+        """在文本面板中汇总关键性能指标。"""
         ax.axis("off")
 
-        # Calculate basic stats
         total_queries = self.total_queries or len(self.durations)
 
-        # Detect cache hits and LLM calls
         cache_hits = 0
         llm_calls = 0
         cache_hit_latency = 0
@@ -617,7 +783,6 @@ class PerfEval:
                 if llm_call_latency == 0:
                     llm_call_latency = label_data.get("average_latency", 0)
 
-        # Calculate hit rate and speed improvement
         hit_rate = (cache_hits / total_queries * 100) if total_queries > 0 else 0
 
         if cache_hits > 0 and llm_calls > 0 and cache_hit_latency > 0:
@@ -626,7 +791,6 @@ class PerfEval:
         else:
             speed_text = "N/A"
 
-        # Build clean summary text
         summary_text = f"""Performance Summary
 
 Queries: {total_queries}
@@ -642,7 +806,6 @@ Cache Speedup: {speed_text}"""
 Total Cost: ${costs['total_cost']:.4f}
 Cost/Query: ${costs.get('avg_cost_per_query', 0):.6f}"""
 
-        # Display with clean styling
         ax.text(
             0.1,
             0.9,

@@ -1,7 +1,9 @@
 """
 Knowledge Base Utilities
+知识库工具模块。
 
 Simple utilities for creating Redis-based knowledge bases from text content.
+提供从文本快速构建 Redis 向量知识库的简化能力。
 """
 
 import logging
@@ -15,24 +17,25 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from redisvl.utils.vectorize import HFTextVectorizer
 from redisvl.index import SearchIndex
 
-# Configure logging
+# 初始化日志记录器
 logger = logging.getLogger("kb-utils")
 
-
 class KnowledgeBaseManager:
-    """Manages Redis-based knowledge bases for web content"""
+    """管理基于 Redis 的知识库索引及其生命周期。"""
     
     def __init__(self, redis_client: redis.Redis, embeddings: Optional[HFTextVectorizer] = None):
         """
-        Initialize the knowledge base manager.
+        初始化知识库管理器。
         
         Args:
-            redis_client: Redis client instance
-            embeddings: HFTextVectorizer embeddings vectorizer (creates new one if None)
+            redis_client: Redis 客户端实例。
+            embeddings: 向量化工具（如果为 None，则默认使用 HuggingFace 的轻量级模型）。
         """
         self.redis_client = redis_client
+        # 默认使用 sentence-transformers 模型进行文本向量化
         self.embeddings = embeddings or HFTextVectorizer(model="sentence-transformers/all-MiniLM-L6-v2")
-        self.active_indexes = {}  # Track active indexes by URL hash
+        # 用于跟踪当前活跃的索引（以 URL 的哈希值为键）
+        self.active_indexes = {} 
     
     def create_knowledge_base(
         self, 
@@ -43,46 +46,45 @@ class KnowledgeBaseManager:
         skip_chunking: bool = False
     ) -> Tuple[bool, str, Optional[SearchIndex]]:
         """
-        Create a knowledge base from content.
+        从输入内容创建知识库向量索引。
         
         Args:
-            source_id: Identifier for the content source (URL or custom ID)
-            content: Either a string (will be chunked) or list of strings (used as-is)
-            chunk_size: Size of text chunks (ignored if content is list or skip_chunking=True)
-            chunk_overlap: Overlap between chunks (ignored if content is list or skip_chunking=True)
-            skip_chunking: If True, treat string content as single chunk
+            source_id: 内容来源标识符（如 URL 或自定义 ID）。
+            content: 输入内容。可以是字符串（将自动切片）或字符串列表（直接使用）。
+            chunk_size: 文本切片的大小（字符数）。
+            chunk_overlap: 切片之间的重叠大小。
+            skip_chunking: 如果为 True，则将整段字符串视为单个切片。
             
         Returns:
-            Tuple of (success, message, search_index)
+            元组 (是否成功, 提示消息, 搜索索引对象)
         """
         try:
             if not content:
                 return False, "No content to process", None
             
-            # Create unique index name based on source ID
+            # 基于 source_id 生成 8 位 MD5 哈希作为索引名，确保 Redis 键名合法且不冲突
             source_hash = hashlib.md5(source_id.encode()).hexdigest()[:8]
             index_name = f"kb-{source_hash}"
             
-            # Handle different content types
+            # --- 步骤 1: 文本预处理与切片 ---
             if isinstance(content, list):
-                # Content is already a list of text chunks
+                # 如果已经是列表，则直接使用
                 text_chunks = content
                 source_type = "text_list"
                 logger.info(f"Using provided list of {len(text_chunks)} text chunks")
             elif isinstance(content, str):
                 if skip_chunking:
-                    # Treat the entire string as one chunk
+                    # 不切片，直接作为单条记录
                     text_chunks = [content]
                     source_type = "text_single"
                     logger.info("Using entire text as single chunk")
                 else:
-                    # Split content into chunks
+                    # 使用 LangChain 的递归字符切片器，尝试按段落、句子保留语境
                     splitter = RecursiveCharacterTextSplitter(
                         chunk_size=chunk_size, 
                         chunk_overlap=chunk_overlap
                     )
                     
-                    # Create documents and split
                     docs = [Document(page_content=content, metadata={"source_id": source_id, "source": "text"})]
                     doc_chunks = splitter.split_documents(docs)
                     text_chunks = [chunk.page_content for chunk in doc_chunks]
@@ -91,35 +93,38 @@ class KnowledgeBaseManager:
             else:
                 return False, f"Unsupported content type: {type(content)}", None
             
-            # Create Redis search index schema
+            # --- 步骤 2: 定义 Redis 向量索引 Schema ---
+            # 包含：文本内容、来源 ID、来源类型、切片索引以及 1536 维的向量字段
             schema = {
                 "index": {"name": index_name, "prefix": f"kb:{source_hash}:"},
                 "fields": [
-                    {"name": "content", "type": "text"},
-                    {"name": "source_id", "type": "tag"},
-                    {"name": "source_type", "type": "tag"},
-                    {"name": "chunk_index", "type": "numeric"},
+                    {"name": "content", "type": "text"},          # 原始文本内容
+                    {"name": "source_id", "type": "tag"},         # 来源标签
+                    {"name": "source_type", "type": "tag"},       # 类型标签
+                    {"name": "chunk_index", "type": "numeric"},   # 切片顺序编号
                     {
                         "name": "content_vector",
                         "type": "vector",
                         "attrs": {
-                            "dims": 1536,  # OpenAI embedding dimensions
-                            "distance_metric": "cosine",
-                            "algorithm": "hnsw",
+                            "dims": 1536,                 # 向量维度（对应 OpenAI 或指定模型）
+                            "distance_metric": "cosine",  # 距离算法：余弦相似度
+                            "algorithm": "hnsw",          # 算法：HNSW (适合高维度、高性能检索)
                             "datatype": "float32",
                         },
                     },
                 ],
             }
             
-            # Create and populate knowledge base
+            # --- 步骤 3: 在 Redis 中创建并初始化索引 ---
             kb_index = SearchIndex.from_dict(schema, redis_client=self.redis_client)
+            # overwrite=True 确保每次处理同一个 URL 时会覆盖旧的索引数据
             kb_index.create(overwrite=True)
             
-            # Prepare documents for indexing
+            # --- 步骤 4: 生成嵌入向量（Embedding）并装载数据 ---
             payload = []
             for i, text_chunk in enumerate(text_chunks):
                 try:
+                    # 调用模型将文本转为向量字节流
                     embedding = self.embeddings.embed(text_chunk, as_buffer=True)
                     payload.append({
                         "content": text_chunk,
@@ -135,10 +140,10 @@ class KnowledgeBaseManager:
             if not payload:
                 return False, "Failed to create embeddings for content", None
             
-            # Load data into the index
+            # 将封装好的负载批量写入 Redis
             kb_index.load(payload)
             
-            # Store reference to active index
+            # 记录到活跃索引字典中，方便管理
             self.active_indexes[source_hash] = {
                 "index": kb_index,
                 "source_id": source_id,
@@ -157,39 +162,38 @@ class KnowledgeBaseManager:
             return False, error_msg, None
     
     def get_index_for_source(self, source_id: str) -> Optional[SearchIndex]:
-        """Get the search index for a specific source ID"""
+        """通过 source_id 获取对应的 Redis 搜索索引对象"""
         source_hash = hashlib.md5(source_id.encode()).hexdigest()[:8]
         index_info = self.active_indexes.get(source_hash)
         return index_info["index"] if index_info else None
     
-    # Backward compatibility
     def get_index_for_url(self, url: str) -> Optional[SearchIndex]:
-        """Get the search index for a specific URL (backward compatibility)"""
+        """通过 URL 获取索引（get_index_for_source 的别名，用于向后兼容）"""
         return self.get_index_for_source(url)
     
     def clear_knowledge_base(self, source_id: str = None) -> str:
         """
-        Clear knowledge base(s).
+        清空知识库索引。
         
         Args:
-            source_id: Specific source ID to clear (clears all if None)
+            source_id: 指定要删除的 source_id。如果为 None，则清空所有已注册的索引。
             
         Returns:
-            Status message
+            操作状态消息。
         """
         try:
             if source_id:
-                # Clear specific source
+                # 删除特定的索引
                 source_hash = hashlib.md5(source_id.encode()).hexdigest()[:8]
                 if source_hash in self.active_indexes:
                     index_info = self.active_indexes[source_hash]
-                    index_info["index"].drop()
+                    index_info["index"].drop() # 物理删除 Redis 中的索引和数据
                     del self.active_indexes[source_hash]
                     return f"✅ Cleared knowledge base for {source_id}"
                 else:
                     return f"⚠️ No knowledge base found for {source_id}"
             else:
-                # Clear all indexes
+                # 遍历并清空所有索引
                 cleared_count = 0
                 for source_hash, index_info in list(self.active_indexes.items()):
                     try:
@@ -207,7 +211,7 @@ class KnowledgeBaseManager:
             return error_msg
     
     def get_status(self) -> Dict[str, Any]:
-        """Get status of all active knowledge bases"""
+        """获取所有当前活跃知识库的状态和元数据。"""
         status = {
             "total_indexes": len(self.active_indexes),
             "indexes": []
@@ -225,9 +229,6 @@ class KnowledgeBaseManager:
         
         return status
 
-
-
-
 def create_knowledge_base_from_texts(
     texts: List[str],
     source_id: str = "custom_texts",
@@ -235,19 +236,17 @@ def create_knowledge_base_from_texts(
     skip_chunking: bool = True
 ) -> Tuple[bool, str, Optional[SearchIndex]]:
     """
-    Convenience function to create a knowledge base directly from texts.
+    便捷函数：直接从文本列表创建知识库。
     
     Args:
-        texts: List of text strings
-        source_id: Identifier for the content source
-        redis_url: Redis connection URL
-        skip_chunking: If True, use texts as-is; if False, chunk each text
+        texts: 文本字符串列表。
+        source_id: 来源标识。
+        redis_url: Redis 连接地址。
+        skip_chunking: 是否跳过分块处理。
         
     Returns:
-        Tuple of (success, message, search_index)
+        元组 (是否成功, 提示消息, 搜索索引对象)
     """
     redis_client = redis.Redis.from_url(redis_url, decode_responses=False)
     kb_manager = KnowledgeBaseManager(redis_client)
     return kb_manager.create_knowledge_base(source_id, texts, skip_chunking=skip_chunking)
-
-

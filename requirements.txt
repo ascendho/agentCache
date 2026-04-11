@@ -16,6 +16,7 @@ langgraph-sdk==0.2.0
 langsmith==0.4.9
 
 panel==1.7.5
+pandas==2.2.3
 jaro-winkler==2.0.3
 seaborn==0.13.2
 fuzzywuzzy==0.18.0
