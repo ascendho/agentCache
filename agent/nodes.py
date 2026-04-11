@@ -507,6 +507,7 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
     feedback = state.get("research_feedback", {}).copy()
     needs_more_research = []
     llm_usage = list(state.get("llm_usage", []))
+    cache_writebacks = []
 
     llm_calls = state.get("llm_calls", {}).copy()
     research_llm = get_research_llm()
@@ -582,6 +583,23 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
                 else:
                     logger.info(f"   ✅ {sub_question[:40]}... - Score: {score:.2f} - Adequate")
 
+                if score >= 0.7 and not cache_hits.get(sub_question, False):
+                    answer = sub_answers.get(sub_question, "")
+                    if answer and cache:
+                        try:
+                            cache.writeback_question_answer(sub_question, answer)
+                            cache_writebacks.append(sub_question)
+                            logger.info(
+                                "   💾 Cache writeback: '%s...' stored after quality check",
+                                sub_question[:40],
+                            )
+                        except Exception as writeback_error:
+                            logger.warning(
+                                "   ⚠️ Cache writeback skipped for '%s...': %s",
+                                sub_question[:40],
+                                writeback_error,
+                            )
+
         evaluation_time = (time.perf_counter() - start_time) * 1000
 
         updated_metrics = update_metrics(
@@ -597,6 +615,7 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
             "llm_calls": llm_calls,
             "llm_usage": llm_usage,
             "metrics": updated_metrics,
+            "cache_writebacks": cache_writebacks,
         }
 
     except Exception as e:

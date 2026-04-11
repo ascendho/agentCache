@@ -1,14 +1,12 @@
-from typing import Dict, Optional
-
 import pandas as pd
-from fuzzywuzzy import fuzz
 
+from typing import Dict, Optional
+from fuzzywuzzy import fuzz
 from cache.wrapper import CacheResult, CacheResults
 
 
 class FuzzyCache:
     """
-    Fuzzy matching cache implementation.
     模糊匹配缓存实现。
     
     使用 fuzzywuzzy 库计算字符串之间的相似度（基于编辑距离）来匹配缓存结果。
@@ -17,6 +15,10 @@ class FuzzyCache:
     def __init__(self):
         # 内部存储：简单的列表结构，存储 [[问题, 答案], ...]
         self.store = []
+    
+    def store_entry(self, question: str, answer: str):
+        """写入一条问答对到模糊缓存。"""
+        self.store.append([question, answer])
 
     def hydrate_from_df(
         self,
@@ -27,7 +29,6 @@ class FuzzyCache:
         clear: bool = True,
     ):
         """
-        Load cache data from a pandas DataFrame.
         从 pandas DataFrame 加载并填充缓存数据。
 
         Args:
@@ -43,12 +44,15 @@ class FuzzyCache:
         # 遍历 DataFrame 的每一行，提取 Q&A 对并存入 self.store
         for row in df[[q_col, a_col]].itertuples(index=False, name=None):
             q, a = row
-            self.store.append([q, a])
+            self.store_entry(q, a)
             idx += 1
+
+    def check(self, query: str, distance_threshold: Optional[float] = None) -> CacheResults:
+        """单条查询接口，内部复用 check_many。"""
+        return self.check_many([query], distance_threshold=distance_threshold)[0]
 
     def check_many(self, queries, distance_threshold: Optional[float] = None):
         """
-        Check multiple queries against the cache using fuzzy matching.
         使用模糊匹配批量检查查询是否命中缓存。
 
         Args:
@@ -64,6 +68,10 @@ class FuzzyCache:
 
         results = []
         for query in queries:
+            if not self.store:
+                results.append(CacheResults(query=query, matches=[]))
+                continue
+
             max_ratio = 0
             matched = None
             
@@ -76,6 +84,10 @@ class FuzzyCache:
                     matched = [q, a]
 
             # 解析最高分匹配项
+            if matched is None:
+                results.append(CacheResults(query=query, matches=[]))
+                continue
+
             matched_query, answer = matched
             
             # 将 0-100 的分数转换为系统统一使用的 0.0-1.0 的“距离”表示

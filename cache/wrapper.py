@@ -20,6 +20,7 @@
     cache.clear_reranker()
 """
 
+import logging
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
@@ -32,6 +33,9 @@ from scipy.spatial.distance import cosine
 from tqdm.auto import tqdm
 
 from cache.config import config as default_config
+
+
+logger = logging.getLogger("agentic-workflow")
 
 
 class CacheResult(BaseModel):
@@ -129,6 +133,8 @@ class SemanticCacheWrapper:
 
         # reranker 是一个可插拔函数：输入候选列表，输出重排后的候选。
         self._reranker: Optional[Callable[[str, List[dict]], List[dict]]] = None
+        self._fuzzy_cache = None
+        self._fuzzy_distance_threshold: float = 0.15
 
     def pair_distance(self, question: str, answer: str) -> float:
         """计算问题与答案文本之间的语义距离。"""
@@ -217,6 +223,22 @@ class SemanticCacheWrapper:
         return question_to_id if return_id_map else None
 
     # ==========================
+    # fuzzy cache 管理方法
+    # ==========================
+    def register_fuzzy_cache(self, fuzzy_cache, distance_threshold: float = 0.15):
+        """注册模糊匹配缓存，作为语义缓存前置阶段。"""
+        self._fuzzy_cache = fuzzy_cache
+        self._fuzzy_distance_threshold = distance_threshold
+
+    def clear_fuzzy_cache(self):
+        """清除模糊匹配缓存。"""
+        self._fuzzy_cache = None
+
+    def has_fuzzy_cache(self) -> bool:
+        """判断是否已注册模糊匹配缓存。"""
+        return self._fuzzy_cache is not None
+
+    # ==========================
     # reranker 管理方法
     # ==========================
     def register_reranker(self, reranker: Callable[[str, List[dict]], List[dict]]):
@@ -239,6 +261,20 @@ class SemanticCacheWrapper:
     def has_reranker(self) -> bool:
         """判断当前是否已注册 reranker。"""
         return self._reranker is not None
+
+    def writeback_question_answer(
+        self,
+        question: str,
+        answer: str,
+        *,
+        ttl_override: Optional[int] = None,
+        update_fuzzy_cache: bool = True,
+    ):
+        """将高质量问答写回语义缓存，并可同步回写模糊缓存。"""
+        self.cache.store(prompt=question, response=answer, ttl=ttl_override)
+        if update_fuzzy_cache and self.has_fuzzy_cache():
+            self._fuzzy_cache.store_entry(question, answer)
+        logger.info("💾 Cache writeback stored for question: '%s...'", question[:50])
 
     # ==========================
     # 查询相关方法
@@ -263,20 +299,71 @@ class SemanticCacheWrapper:
             CacheResults：包含 query 与标准化后的 matches 列表。
         """
 
+        # 先走更便宜的模糊匹配层，命中则直接返回。
+        if self.has_fuzzy_cache():
+            logger.info("🔎 Fuzzy stage: checking query '%s...'", query[:50])
+            fuzzy_results = self._fuzzy_cache.check_many(
+                [query],
+                distance_threshold=self._fuzzy_distance_threshold,
+            )
+            if fuzzy_results and fuzzy_results[0].matches:
+                logger.info(
+                    "✅ Fuzzy HIT: query '%s...' matched prompt '%s'",
+                    query[:50],
+                    fuzzy_results[0].matches[0].prompt[:50],
+                )
+                return fuzzy_results[0]
+            logger.info("❌ Fuzzy MISS: query '%s...'", query[:50])
+        else:
+            logger.info("↩️ Fuzzy stage disabled: query '%s...'", query[:50])
+
         # 若启用 reranker，需要扩大初始候选池，给 reranker 足够重排空间。
         _num_results = (
             num_results if not self.has_reranker() else max(10, 3 * num_results)
+        )
+        logger.info(
+            "🔎 Semantic stage: checking query '%s...' (num_results=%d, reranker=%s)",
+            query[:50],
+            _num_results,
+            "on" if self.has_reranker() else "off",
         )
         candidates = self.cache.check(
             query, distance_threshold=distance_threshold, num_results=_num_results
         )
 
         if not candidates:
+            logger.info(
+                "❌ Semantic MISS: query '%s...' returned no candidates; reranker not executed",
+                query[:50],
+            )
             return CacheResults(query=query, matches=[])
+
+        logger.info(
+            "✅ Semantic candidates found: query '%s...' got %d candidate(s)",
+            query[:50],
+            len(candidates),
+        )
 
         # 候选重排：由业务侧注入策略（交叉编码器、LLM 打分等）。
         if self.has_reranker():
+            logger.info("🧠 Reranker stage: executing on query '%s...'", query[:50])
             candidates = self._reranker(query, candidates)
+            if not candidates:
+                logger.info(
+                    "❌ Reranker filtered all candidates for query '%s...'",
+                    query[:50],
+                )
+            else:
+                logger.info(
+                    "✅ Reranker retained %d candidate(s) for query '%s...'",
+                    len(candidates),
+                    query[:50],
+                )
+        else:
+            logger.info(
+                "↩️ Reranker disabled: semantic candidates returned without reranking for query '%s...'",
+                query[:50],
+            )
 
         results: List[CacheResult] = []
         for item in candidates[:num_results]:

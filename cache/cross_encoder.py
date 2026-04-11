@@ -71,7 +71,7 @@ class CrossEncoder:
 
 class CrossEncoderReranker:
     """
-    交叉编码器重排序器，专门用于集成到语义缓存（Semantic Cache）的工作流中。
+    交叉编码器重排序器，专门用于集成到语义缓存的工作流中。
     """
     def __init__(self, cross_encoder: CrossEncoder):
         """
@@ -85,7 +85,6 @@ class CrossEncoderReranker:
     def __call__(self, query: str, candidates: List[Dict]) -> List[Dict]:
         """
         用于语义缓存集成的重排序函数。
-        
         当向量检索给出多个候选缓存结果时，使用交叉编码器对这些结果进行精确定分并排序。
 
         Args:

@@ -54,6 +54,22 @@ CACHE_NAME=semantic-cache
 CACHE_DISTANCE_THRESHOLD=0.3
 CACHE_TTL_SECONDS=3600
 
+# 缓存增强链路开关（可独立开关）
+ENABLE_FUZZY_CACHE=true
+ENABLE_CROSS_ENCODER_RERANKER=true
+ENABLE_LLM_RERANKER=true
+
+# 模糊匹配阈值（距离越小越严格）
+FUZZY_DISTANCE_THRESHOLD=0.15
+
+# CrossEncoder 模型
+CROSS_ENCODER_MODEL=Alibaba-NLP/gte-reranker-modernbert-base
+
+# LLM Reranker（推荐 Doubao Seed Lite）
+LLM_RERANKER_MODEL=doubao-seed-lite
+LLM_RERANKER_BATCH_SIZE=5
+LLM_RERANKER_TOP_K=5
+
 # 运行必需：火山引擎 ARK
 ARK_API_KEY=your_ark_api_key_here
 
@@ -66,6 +82,12 @@ LANGCHAIN_API_KEY=your_langsmith_key_here
 ```
 
 注意：API Key 直接填纯文本，不要额外加引号。
+
+缓存执行顺序（默认）：
+1. Fuzzy 匹配（低成本快速命中）
+2. 语义缓存向量检索
+3. CrossEncoder 重排
+4. LLM Reranker（Doubao Seed Lite）最终筛选
 
 ### 5) 运行项目
 

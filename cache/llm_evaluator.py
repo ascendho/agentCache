@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Tuple
 
 import pandas as pd
-from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 from tqdm.auto import tqdm
+from cache.config import config
 
 # 配置日志输出
 logging.basicConfig(level=logging.INFO)
@@ -66,20 +66,31 @@ DEFAULT_COMPARE_PROMPT_TEMPLATE = """
 
 class LLMEvaluator:
     """LLM 评估器类，负责调用大模型进行语义比对。"""
+
+    _reranker_llm_cache: Dict[str, Runnable] = {}
+
+    @staticmethod
+    def get_reranker_llm(model: str = None) -> Runnable:
+        """获取（并缓存）用于 reranker 的 LLM。"""
+        load_env()
+        selected_model = model or config.get("llm_reranker_model", "doubao-seed-lite")
+        if selected_model not in LLMEvaluator._reranker_llm_cache:
+            LLMEvaluator._reranker_llm_cache[selected_model] = ChatOpenAI(
+                model=selected_model,
+                api_key=os.getenv("ARK_API_KEY"),
+                base_url="https://ark.cn-beijing.volces.com/api/v3",
+            ).with_structured_output(SimilarityResult)
+        return LLMEvaluator._reranker_llm_cache[selected_model]
     
     @staticmethod
     def construct_with_ark(
-            prompt=DEFAULT_COMPARE_PROMPT_TEMPLATE, model="deepseek-v3-2-251201"
+            prompt=DEFAULT_COMPARE_PROMPT_TEMPLATE, model: str = None
         ):
-            """使用火山引擎 (Ark) API 构建评估器（通常用于接入 DeepSeek 等模型）。"""
-            llm = ChatOpenAI(
-                model=model,
-                api_key=os.getenv("ARK_API_KEY"),
-                base_url="https://ark.cn-beijing.volces.com/api/v3"
-            ).with_structured_output(SimilarityResult) # 强制要求结构化输出
+            """使用火山引擎 (Ark) API 构建评估器（默认使用 llm_reranker_model）。"""
+            llm = LLMEvaluator.get_reranker_llm(model=model)
             return LLMEvaluator(llm, prompt)
 
-    def __init__(self, llm: BaseChatModel, prompt: str):
+    def __init__(self, llm: Runnable, prompt: str):
         """初始化评估器，构建 LangChain 运行链。"""
         prompt_template = PromptTemplate(
             template=prompt,
