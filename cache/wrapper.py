@@ -168,7 +168,7 @@ class SemanticCacheWrapper:
             ttl=int(config["ttl_seconds"]),
         )
 
-    def preload_from_df(
+    def hydrate_from_df(
         self,
         df: pd.DataFrame,
         *,
@@ -195,26 +195,6 @@ class SemanticCacheWrapper:
                 question_to_id[q] = idx
             idx += 1
         return question_to_id if return_id_map else None
-
-    def hydrate_from_df(
-        self,
-        df: pd.DataFrame,
-        *,
-        q_col: str = "question",
-        a_col: str = "answer",
-        clear: bool = True,
-        ttl_override: Optional[int] = None,
-        return_id_map: bool = False,
-    ) -> Optional[Dict[str, int]]:
-        """兼容旧命名：等价于 preload_from_df。"""
-        return self.preload_from_df(
-            df,
-            q_col=q_col,
-            a_col=a_col,
-            clear=clear,
-            ttl_override=ttl_override,
-            return_id_map=return_id_map,
-        )
 
     def hydrate_from_pairs(
         self,

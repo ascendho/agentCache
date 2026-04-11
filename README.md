@@ -1,6 +1,6 @@
 # 带有语义缓存的高效 AI Agent
 
-本项目实现了一个基于 LangGraph + RedisVL 语义缓存的 Agent 工作流。
+本项目实现了一个基于 LangGraph + RedisVL 语义缓存的 Agent 工作流（Customer Support Agent）。
 目标是通过语义命中复用，降低重复问题的 LLM 成本并提升响应效率。
 
 ## 前置要求
