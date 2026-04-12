@@ -1,9 +1,5 @@
 """
-Routing and edge logic for the deep research agent workflow.
 深度研究 Agent 工作流的路由和边（Edge）逻辑。
-
-This module contains the conditional routing functions that determine
-the flow of execution through the agentic workflow graph.
 此模块包含条件路由函数，用于决定 Agent 工作流图中的执行流向。
 """
 

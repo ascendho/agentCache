@@ -52,7 +52,7 @@ def _split_markdown_into_structured_chunks(markdown_text: str):
 
 def create_knowledge_base():
     """构建演示用知识库并返回索引与向量模型。"""
-    embeddings = HFTextVectorizer(model="sentence-transformers/all-MiniLM-L6-v2")
+    embeddings = HFTextVectorizer(model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     markdown_text = RAW_DOCS_MD_PATH.read_text(encoding="utf-8")
     raw_docs = _split_markdown_into_structured_chunks(markdown_text)
 

@@ -34,7 +34,8 @@ config = dict(
     
     # 距离阈值：用于判断两个问题的语义是否足够接近以命中缓存
     # 数值越小要求越严苛（0.0 表示完全一致，1.0 表示差异很大）
-    distance_threshold=float(os.getenv("CACHE_DISTANCE_THRESHOLD", "0.3")),
+    # 注：距离越小越相似，0.1-0.2 比较合理
+    distance_threshold=float(os.getenv("CACHE_DISTANCE_THRESHOLD", "0.2")),
     
     # 缓存有效期（秒）：默认为 3600 秒（1小时）
     ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "3600")),

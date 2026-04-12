@@ -1,9 +1,5 @@
 """
-Workflow nodes for the deep research agent.
 深度研究 Agent 的工作流节点。
-
-This module contains all the node functions that implement the core
-logic of the agentic workflow with semantic caching.
 该模块包含用于实现带语义缓存的 Agent 工作流核心逻辑的所有节点函数。
 """
 

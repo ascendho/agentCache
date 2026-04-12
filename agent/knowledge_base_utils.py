@@ -1,8 +1,5 @@
 """
-Knowledge Base Utilities
 知识库工具模块。
-
-Simple utilities for creating Redis-based knowledge bases from text content.
 提供从文本快速构建 Redis 向量知识库的简化能力。
 """
 
@@ -33,7 +30,7 @@ class KnowledgeBaseManager:
         """
         self.redis_client = redis_client
         # 默认使用 sentence-transformers 模型进行文本向量化
-        self.embeddings = embeddings or HFTextVectorizer(model="sentence-transformers/all-MiniLM-L6-v2")
+        self.embeddings = embeddings or HFTextVectorizer(model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
         # 用于跟踪当前活跃的索引（以 URL 的哈希值为键）
         self.active_indexes = {} 
     
@@ -130,7 +127,7 @@ class KnowledgeBaseManager:
                         "name": "content_vector",
                         "type": "vector",
                         "attrs": {
-                            "dims": 1536,                 # 向量维度（对应 OpenAI 或指定模型）
+                            "dims": 384,                  # 向量维度（对应 all-MiniLM-L6-v2）
                             "distance_metric": "cosine",  # 距离算法：余弦相似度
                             "algorithm": "hnsw",          # 算法：HNSW (适合高维度、高性能检索)
                             "datatype": "float32",
