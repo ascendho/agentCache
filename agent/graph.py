@@ -37,7 +37,7 @@ def build_workflow(cache, kb_index, embeddings):
 
     该函数定义了状态机的拓扑结构，即数据如何在各个处理节点之间流转。
     流程图预览：
-    [开始] -> 问题拆解 -> 缓存检查 
+    [开始] -> 按编号准备子问题 -> 缓存检查 
                |           |
                |      (未命中) -> 研究/检索 -> 质量评估 --(不合格)--> [返回研究]
                |           |          |         |
@@ -51,7 +51,7 @@ def build_workflow(cache, kb_index, embeddings):
 
     # 3. 注册工作流中的处理节点
     # 每个节点对应 nodes.py 中的一个函数，负责处理特定的业务逻辑
-    workflow.add_node("decompose_query", decompose_query_node)      # 节点：拆解复杂问题为子问题
+    workflow.add_node("decompose_query", decompose_query_node)      # 节点：按编号准备子问题（不做LLM拆解）
     workflow.add_node("check_cache", check_cache_node)              # 节点：检查语义缓存
     workflow.add_node("research", research_node)                    # 节点：从向量知识库中检索并分析
     workflow.add_node("evaluate_quality", evaluate_quality_node)    # 节点：评估研究结果的质量
@@ -62,7 +62,7 @@ def build_workflow(cache, kb_index, embeddings):
 
     # 5. 构建节点之间的边（Edges）和条件路由
     
-    # 线性连接：拆解完成后立即检查缓存
+    # 线性连接：子问题准备完成后立即检查缓存
     workflow.add_edge("decompose_query", "check_cache")
     
     # 条件分支：根据缓存命中的结果决定去向

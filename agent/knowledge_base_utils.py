@@ -9,7 +9,7 @@ Simple utilities for creating Redis-based knowledge bases from text content.
 import logging
 import hashlib
 import time
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 
 import redis
 from langchain.schema import Document
@@ -68,14 +68,31 @@ class KnowledgeBaseManager:
             
             # --- 步骤 1: 文本预处理与切片 ---
             if isinstance(content, list):
-                # 如果已经是列表，则直接使用
-                text_chunks = content
-                source_type = "text_list"
+                # 如果已经是列表，支持：
+                # 1) ["text1", "text2"]
+                # 2) [{"content": "...", "metadata": {...}}]
+                normalized_chunks = []
+                for item in content:
+                    if isinstance(item, str):
+                        normalized_chunks.append({"content": item, "metadata": {}})
+                    elif isinstance(item, dict):
+                        chunk_content = str(item.get("content", "") or "").strip()
+                        if not chunk_content:
+                            continue
+                        raw_meta = item.get("metadata", {})
+                        metadata = raw_meta if isinstance(raw_meta, dict) else {}
+                        normalized_chunks.append({"content": chunk_content, "metadata": metadata})
+                    else:
+                        logger.warning(f"Unsupported chunk type in list: {type(item)}")
+
+                text_chunks = normalized_chunks
+                has_structured_metadata = any(chunk.get("metadata") for chunk in text_chunks)
+                source_type = "structured_list" if has_structured_metadata else "text_list"
                 logger.info(f"Using provided list of {len(text_chunks)} text chunks")
             elif isinstance(content, str):
                 if skip_chunking:
                     # 不切片，直接作为单条记录
-                    text_chunks = [content]
+                    text_chunks = [{"content": content, "metadata": {}}]
                     source_type = "text_single"
                     logger.info("Using entire text as single chunk")
                 else:
@@ -87,7 +104,10 @@ class KnowledgeBaseManager:
                     
                     docs = [Document(page_content=content, metadata={"source_id": source_id, "source": "text"})]
                     doc_chunks = splitter.split_documents(docs)
-                    text_chunks = [chunk.page_content for chunk in doc_chunks]
+                    text_chunks = [
+                        {"content": chunk.page_content, "metadata": chunk.metadata or {}}
+                        for chunk in doc_chunks
+                    ]
                     source_type = "text_chunked"
                     logger.info(f"Split text into {len(text_chunks)} chunks")
             else:
@@ -101,6 +121,10 @@ class KnowledgeBaseManager:
                     {"name": "content", "type": "text"},          # 原始文本内容
                     {"name": "source_id", "type": "tag"},         # 来源标签
                     {"name": "source_type", "type": "tag"},       # 类型标签
+                    {"name": "header_1", "type": "text"},         # Markdown 一级标题
+                    {"name": "header_2", "type": "text"},         # Markdown 二级标题
+                    {"name": "header_3", "type": "text"},         # Markdown 三级标题
+                    {"name": "is_announcement", "type": "tag"},   # 是否公告块
                     {"name": "chunk_index", "type": "numeric"},   # 切片顺序编号
                     {
                         "name": "content_vector",
@@ -122,14 +146,22 @@ class KnowledgeBaseManager:
             
             # --- 步骤 4: 生成嵌入向量（Embedding）并装载数据 ---
             payload = []
-            for i, text_chunk in enumerate(text_chunks):
+            for i, chunk in enumerate(text_chunks):
                 try:
+                    text_chunk = str(chunk.get("content", "") or "").strip()
+                    if not text_chunk:
+                        continue
+                    metadata = chunk.get("metadata", {}) if isinstance(chunk, dict) else {}
                     # 调用模型将文本转为向量字节流
                     embedding = self.embeddings.embed(text_chunk, as_buffer=True)
                     payload.append({
                         "content": text_chunk,
                         "source_id": source_id,
                         "source_type": source_type,
+                        "header_1": str(metadata.get("header_1", "") or ""),
+                        "header_2": str(metadata.get("header_2", "") or ""),
+                        "header_3": str(metadata.get("header_3", "") or ""),
+                        "is_announcement": "true" if bool(metadata.get("is_announcement", False)) else "false",
                         "chunk_index": i,
                         "content_vector": embedding,
                     })
@@ -230,7 +262,7 @@ class KnowledgeBaseManager:
         return status
 
 def create_knowledge_base_from_texts(
-    texts: List[str],
+    texts: List[Union[str, Dict[str, Any]]],
     source_id: str = "custom_texts",
     redis_url: str = "redis://localhost:6379",
     skip_chunking: bool = True

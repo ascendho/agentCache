@@ -1,21 +1,60 @@
+import re
+from pathlib import Path
+
 from redisvl.utils.vectorize import HFTextVectorizer
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
 from agent import create_knowledge_base_from_texts
+
+
+RAW_DOCS_MD_PATH = Path(__file__).resolve().parents[1] / "data" / "raw_docs.md"
+
+
+def _split_markdown_into_structured_chunks(markdown_text: str):
+    """按 Markdown 层级切块，并对超长段落进行递归兜底切块。"""
+    headers_to_split_on = [
+        ("#", "header_1"),
+        ("##", "header_2"),
+        ("###", "header_3"),
+    ]
+    header_splitter = MarkdownHeaderTextSplitter(
+        headers_to_split_on=headers_to_split_on,
+        strip_headers=True,
+    )
+    header_docs = header_splitter.split_text(markdown_text)
+
+    recursive_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=80,
+        separators=["\n\n", "\n", "。", "！", "？", " ", ""],
+    )
+
+    structured_chunks = []
+    for doc in header_docs:
+        child_docs = recursive_splitter.split_documents([doc])
+        for child in child_docs:
+            content = child.page_content.strip()
+            if not content:
+                continue
+            metadata = {
+                "header_1": child.metadata.get("header_1", ""),
+                "header_2": child.metadata.get("header_2", ""),
+                "header_3": child.metadata.get("header_3", ""),
+                "is_announcement": bool(
+                    re.search(r"(?m)^\s*>", content)
+                    or "最新系统公告" in content
+                    or "黑五" in content and "补偿" in content
+                ),
+            }
+            structured_chunks.append({"content": content, "metadata": metadata})
+    return structured_chunks
 
 
 def create_knowledge_base():
     """构建演示用知识库并返回索引与向量模型。"""
     embeddings = HFTextVectorizer(model="sentence-transformers/all-MiniLM-L6-v2")
-    raw_docs = [
-        "Our premium support plan includes 24/7 phone support, priority email response within 2 hours, and dedicated account management. Premium support costs $49/month.",
-        "Account upgrade process: Go to Account Settings -> Plan & Billing -> Select Upgrade. Available plans: Basic $9/month, Pro $29/month, Enterprise $99/month.",
-        "API rate limits by plan: Free tier 100 requests/hour, Basic 1,000 requests/hour, Pro 10,000 requests/hour, Enterprise unlimited with fair-use policy.",
-        "Data export options: CSV, JSON, XML formats supported. Large exports (>1GB) may take up to 24 hours to process.",
-        "Third-party integrations: Native support for Slack, Microsoft Teams, Zoom, Salesforce, HubSpot. 200+ additional integrations available via Zapier.",
-        "Security features: SOC2 compliance, end-to-end encryption, GDPR compliance, SSO integration, audit logs, IP whitelisting.",
-        "Billing and payments: We accept all major credit cards, PayPal, and ACH transfers. Enterprise customers can pay by invoice with NET30 terms.",
-        "Account recovery: Use forgot password link, verify email, or contact support with account verification details. Response within 4 hours.",
-    ]
+    markdown_text = RAW_DOCS_MD_PATH.read_text(encoding="utf-8")
+    raw_docs = _split_markdown_into_structured_chunks(markdown_text)
 
     _, _, kb_index = create_knowledge_base_from_texts(
         texts=raw_docs,

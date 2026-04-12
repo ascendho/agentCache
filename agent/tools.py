@@ -62,7 +62,7 @@ def search_knowledge_base(query: str, top_k: int = 3) -> str:
     # 防御式检查：如果工具未被正确初始化，直接返回错误描述，
     # 这样 LLM 能够识别到错误并尝试采取其他行动，而不是让整个程序崩溃。
     if not kb_index or not embeddings:
-        return "Error: Knowledge base not initialized. Please call initialize_tools() first."
+        return "错误：知识库尚未初始化，请先调用 initialize_tools()。"
 
     logger.info(
         f"🔍 Using search_knowledge_base tool for query: '{query}' (top_k={top_k})"
@@ -77,7 +77,14 @@ def search_knowledge_base(query: str, top_k: int = 3) -> str:
         search_query = VectorQuery(
             vector=query_vector,
             vector_field_name="content_vector",
-            return_fields=["content", "vector_distance"], # 指定返回原始文本和向量距离
+            return_fields=[
+                "content",
+                "vector_distance",
+                "header_1",
+                "header_2",
+                "header_3",
+                "is_announcement",
+            ], # 返回原始文本、向量距离和结构化元信息
             num_results=top_k,
         )
 
@@ -86,15 +93,31 @@ def search_knowledge_base(query: str, top_k: int = 3) -> str:
 
         # 如果没有找到任何匹配项
         if not results:
-            return f"No relevant information found for query: {query}"
+            return f"未找到与该问题相关的信息：{query}"
 
         # 3) 将原始检索结果格式化为易于 LLM 理解的可读文本
         formatted_results = []
         for i, result in enumerate(results, 1):
             # 将向量距离转换为相关度分数。距离越小，分数越高（1.0 表示完全匹配）
             relevance = 1.0 - float(result["vector_distance"])
+            header_parts = [
+                str(result.get("header_1", "") or "").strip(),
+                str(result.get("header_2", "") or "").strip(),
+                str(result.get("header_3", "") or "").strip(),
+            ]
+            header_path = " > ".join([h for h in header_parts if h])
+            is_announcement = str(result.get("is_announcement", "false")).lower() == "true"
+
+            prefix_lines = []
+            if header_path:
+                prefix_lines.append(f"Section: {header_path}")
+            if is_announcement:
+                prefix_lines.append("Tag: ANNOUNCEMENT")
+            prefix_block = "\n".join(prefix_lines)
+
+            body = f"Result {i} (relevance: {relevance:.3f}):\n{result['content']}"
             formatted_results.append(
-                f"Result {i} (relevance: {relevance:.3f}):\n{result['content']}"
+                f"{prefix_block}\n{body}" if prefix_block else body
             )
 
         # 返回合并后的字符串
@@ -103,4 +126,4 @@ def search_knowledge_base(query: str, top_k: int = 3) -> str:
     except Exception as e:
         # 捕获检索过程中的任何异常（如 Redis 连接中断、索引不存在等）
         logger.error(f"Error during KB search: {e}")
-        return f"Error searching knowledge base: {str(e)}"
+        return f"知识库检索异常：{str(e)}"

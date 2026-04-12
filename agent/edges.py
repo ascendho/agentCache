@@ -51,14 +51,14 @@ def route_after_cache_check(state: Dict[str, Any]) -> Literal["research", "synth
 
     if cache_misses:
         logger.info(
-            f"🔀 Routing to researcher: {len(cache_misses)} cache misses detected"
+            f"🔀 路由到研究节点：检测到 {len(cache_misses)} 个缓存未命中"
         )
         for miss in cache_misses:
-            logger.info(f"   🔍 Will research: '{miss[:50]}...'")
+            logger.info(f"   🔍 待研究：'{miss[:50]}...'")
         return "research"
     else:
         # 如果命中了所有缓存，则直接跳过研究阶段
-        logger.info("🔀 Routing to synthesis: all sub-questions cached!")
+        logger.info("🔀 路由到汇总节点：所有子问题均已命中缓存")
         return "synthesize"
 
 
@@ -87,19 +87,19 @@ def route_after_quality_evaluation(
 
     if needs_more_research:
         logger.info(
-            f"🔄 Routing to additional research: {len(needs_more_research)} questions need improvement"
+            f"🔄 路由到补充研究：{len(needs_more_research)} 个问题需要改进"
         )
         for sq in needs_more_research:
             iteration = research_iterations.get(sq, 0)
             score = quality_scores.get(sq, 0)
             logger.info(
-                f"   🔍 Improve: '{sq[:40]}...' (score: {score:.2f}, iteration: {iteration + 1})"
+                f"   🔍 待改进：'{sq[:40]}...' (分数: {score:.2f}, 轮次: {iteration + 1})"
             )
         # 返回 research 节点，形成一个循环（Loop）
         return "research"
     else:
         # 如果质量全部合格，或者达到了最大迭代次数上限
-        logger.info("🔀 Routing to synthesis: all research quality is adequate!")
+        logger.info("🔀 路由到汇总节点：研究质量已达标")
         # 在进入综合阶段前，将这些经过验证的高质量结果存入缓存
         cache_validated_research(state)
         return "synthesize"
@@ -114,7 +114,7 @@ def cache_validated_research(state: Dict[str, Any]):
     """
     # 检查缓存组件是否已初始化
     if not cache:
-        logger.warning("⚠️ Cache not initialized - skipping research caching")
+        logger.warning("⚠️ 缓存未初始化，跳过研究结果写回")
         return
 
     # 检查是否全局禁用了缓存功能
@@ -140,10 +140,10 @@ def cache_validated_research(state: Dict[str, Any]):
                 cache.cache.store(prompt=sub_question, response=answer)
                 cached_count += 1
                 logger.info(
-                    f"   💾 Cached validated research: '{sub_question[:40]}...'"
+                    f"   💾 已写回高质量研究结果：'{sub_question[:40]}...'"
                 )
 
         if cached_count > 0:
-            logger.info(f"✅ Cached {cached_count} validated research results")
+            logger.info(f"✅ 已写回 {cached_count} 条高质量研究结果")
     except Exception as e:
-        logger.warning(f"⚠️ Research caching failed: {e}")
+        logger.warning(f"⚠️ 研究结果写回失败: {e}")

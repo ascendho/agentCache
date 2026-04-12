@@ -7,15 +7,9 @@ from dotenv import load_dotenv
 # 加载当前目录下的 .env 文件，将其中定义的变量注入到环境变量中
 load_dotenv()
 
-
-def _to_bool_env(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
 def load_ark_key():
     """
+    Load ARK API key from environment variables or prompt the user.
     从环境变量加载 ARK API 密钥，如果不存在则提示用户输入。
 
     注：ARK API 通常用于访问火山引擎（字节跳动）提供的 LLM 服务。
@@ -44,20 +38,4 @@ config = dict(
     
     # 缓存有效期（秒）：默认为 3600 秒（1小时）
     ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "3600")),
-
-    # 缓存链路开关（可独立启停，无需改主流程代码）
-    enable_fuzzy_cache=_to_bool_env("ENABLE_FUZZY_CACHE", False),
-    enable_cross_encoder_reranker=_to_bool_env("ENABLE_CROSS_ENCODER_RERANKER", False),
-    enable_llm_reranker=_to_bool_env("ENABLE_LLM_RERANKER", False),
-
-    # 各层参数
-    fuzzy_distance_threshold=float(os.getenv("FUZZY_DISTANCE_THRESHOLD", "0.15")),
-    cross_encoder_model=os.getenv(
-        "CROSS_ENCODER_MODEL",
-        "Alibaba-NLP/gte-reranker-modernbert-base",
-    ),
-
-    llm_reranker_model=os.getenv("LLM_RERANKER_MODEL", "doubao-seed-2-0-lite-260215"),
-    llm_reranker_batch_size=int(os.getenv("LLM_RERANKER_BATCH_SIZE", "5")),
-    llm_reranker_top_k=int(os.getenv("LLM_RERANKER_TOP_K", "5")),
 )

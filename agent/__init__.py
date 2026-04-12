@@ -86,6 +86,7 @@ def run_agent(agent, query: str, enable_caching: bool = True) -> Dict[str, Any]:
         "sub_answers": {},                    # 子问题的答案存储
         "cache_hits": {},                     # 每个子问题的缓存命中情况
         "cache_confidences": {},              # 缓存命中的置信度
+        "cache_seed_ids": {},                 # 缓存命中时对应 FAQ 种子 id
         "cache_enabled": enable_caching,      # 是否启用缓存
         "research_iterations": {},            # 记录子问题的研究迭代次数
         "max_research_iterations": 2,         # 最大迭代次数，防止死循环
@@ -123,6 +124,7 @@ def run_agent(agent, query: str, enable_caching: bool = True) -> Dict[str, Any]:
             "sub_answers": final_state["sub_answers"],
             "cache_hits": final_state["cache_hits"],
             "cache_confidences": final_state["cache_confidences"],
+            "cache_seed_ids": final_state.get("cache_seed_ids", {}),
             "final_response": final_state["final_response"],
             "execution_path": final_metrics["execution_path"],
             "total_latency": f"{total_latency:.2f}ms",
@@ -202,34 +204,6 @@ def display_results(result):
         print(
             f"   🤖 LLM 调用次数: **{total_calls}** (DeepSeek-V3: {analysis_calls}, Doubao-Lite: {research_calls})"
         )
-
-    # 基于每次调用的 token 元数据，展示本次请求的费用摘要。
-    llm_usage = result.get("llm_usage", [])
-    if llm_usage:
-        try:
-            from cache.evals import PerfEval, format_cost
-
-            perf = PerfEval()
-            for call in llm_usage:
-                perf.record_llm_call(
-                    model=call.get("model", "unknown-model"),
-                    provider=call.get("provider", "openai"),
-                    input_tokens=int(call.get("input_tokens", 0) or 0),
-                    output_tokens=int(call.get("output_tokens", 0) or 0),
-                )
-            perf.set_total_queries(1)
-            costs = perf.get_costs()
-
-            total_in = sum(int(c.get("input_tokens", 0) or 0) for c in llm_usage)
-            total_out = sum(int(c.get("output_tokens", 0) or 0) for c in llm_usage)
-
-            print(
-                f"   💰 本次成本: **{format_cost(costs.get('total_cost', 0.0), costs.get('currency', 'CNY'))}** "
-                f"(币种: {costs.get('currency', 'CNY')}, in/out tokens: {total_in}/{total_out})"
-            )
-        except Exception as e:
-            # 成本展示失败不影响主流程结果展示。
-            print(f"   💰 本次成本: 无法计算（{e}）")
 
     # 细化展示各阶段耗时
     metrics = result.get("metrics", {})
@@ -394,6 +368,10 @@ def analyze_agent_results(results):
     total_llm_calls_all = sum(d['total_llm_calls'] for d in scenario_data)
     avg_latency = np.mean([d['total_latency'] for d in scenario_data])
     
+    scenario_lines = "\n".join(
+        [f"  • Scenario {d['scenario_num']}: {d['hit_rate']:.0f}% hit rate" for d in scenario_data]
+    )
+
     summary_text = f"""
 📊 OVERALL PERFORMANCE SUMMARY
 
@@ -407,9 +385,7 @@ def analyze_agent_results(results):
 ✅ Result: Semantic caching delivers progressive intelligence and cost savings
 
 💡 Cache Evolution:
-  • Scenario 1: {scenario_data[0]['hit_rate']:.0f}% hit rate
-  • Scenario 2: {scenario_data[1]['hit_rate']:.0f}% hit rate  
-  • Scenario 3: {scenario_data[2]['hit_rate']:.0f}% hit rate
+{scenario_lines}
 """
     
     ax4.text(0.05, 0.95, summary_text, transform=ax4.transAxes, fontsize=11,

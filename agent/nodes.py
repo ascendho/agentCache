@@ -10,6 +10,7 @@ logic of the agentic workflow with semantic caching.
 import time
 import logging
 import os
+import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional, TypedDict, Tuple
 import concurrent.futures
@@ -140,6 +141,7 @@ class WorkflowState(TypedDict):
 
     cache_hits: Dict[str, bool]      # 记录每个子问题是否命中缓存
     cache_confidences: Dict[str, float] # 记录缓存命中的置信度
+    cache_seed_ids: Dict[str, Optional[int]] # 命中缓存时对应 FAQ 种子 id
     cache_enabled: bool              # 开关：是否启用缓存功能（用于 A/B 测试）
 
     research_iterations: Dict[str, int] # 记录每个子问题已进行的迭代次数
@@ -204,29 +206,29 @@ def decompose_question_node(state: WorkflowState) -> WorkflowState:
     """
     节点：将复杂查询分解为专注的、可缓存的子问题。
     
-    逻辑：使用分析型 LLM 将用户提问拆解为 2-4 个独立的子问题。
+    逻辑：使用分析型 LLM 将用户提问拆解为 2-5 个独立的子问题。
     目的：实现细粒度缓存。例如，“A和B的区别”会被拆为“A是什么”和“B是什么”，
     下次有人问“A和C的区别”时，“A是什么”就可以直接从缓存读取。
     """
     start_time = time.perf_counter()
     query = state["original_query"]
 
-    logger.info(f"🧠 Supervisor: Decomposing query: '{query[:50]}...'")
+    logger.info(f"🧠 调度器：正在拆解问题：'{query[:50]}...'")
 
     try:
         # 构建拆解提示词
         decomposition_prompt = f"""
-        Analyze this customer support query and determine if it needs to be broken down into sub-questions.
+        请分析下面这个客服场景问题，判断是否需要拆分为多个子问题。
         
-        Original query: {query}
+        原始问题：{query}
         
-        Rules:
-        - If the query is simple and focused on ONE topic, respond with: SINGLE_QUESTION
-        - If the query has multiple distinct aspects that would benefit from separate research, break it into 2-4 specific sub-questions
-        - Each sub-question should be self-contained and cacheable
+        规则：
+        - 如果问题简单且只聚焦一个主题，请仅输出：SINGLE_QUESTION
+        - 如果问题包含多个独立方面且适合分别检索，请拆成 2-5 个具体子问题
+        - 每个子问题都应自包含且适合做缓存复用
         
-        If breaking down, provide ONLY the sub-questions, one per line, no numbering.
-        If keeping as single question, respond with exactly: SINGLE_QUESTION
+        如果需要拆分：只输出子问题，每行一个，不要编号。
+        如果不需要拆分：请严格输出 SINGLE_QUESTION。
         """
 
         response = get_analysis_llm().invoke(
@@ -247,22 +249,22 @@ def decompose_question_node(state: WorkflowState) -> WorkflowState:
         response_content = response.content.strip()
         if response_content == "SINGLE_QUESTION":
             sub_questions = [query]
-            logger.info("🧠 Query is simple - keeping as single question")
+            logger.info("🧠 问题较简单，保持为单问题")
         else:
             # 解析 LLM 返回的行，过滤掉序号
             sub_questions = [
                 line.strip()
                 for line in response_content.split("\n")
                 if line.strip()
-                and not line.strip().startswith(("1.", "2.", "3.", "4.", "-", "*"))
+                and not line.strip().startswith(("1.", "2.", "3.", "4.", "5.", "-", "*"))
                 and line.strip() != "SINGLE_QUESTION"
             ]
 
             # 异常处理：如果没有拆出结果，回退到原始提问
             if not sub_questions or len(sub_questions) == 1:
                 sub_questions = [query]
-            elif len(sub_questions) > 4:
-                sub_questions = sub_questions[:4] # 限制数量，防止任务爆炸
+            elif len(sub_questions) > 5:
+                sub_questions = sub_questions[:5] # 限制数量，防止任务爆炸
 
         # 初始化每个子问题的研究状态
         research_iterations = {sq: 0 for sq in sub_questions}
@@ -297,7 +299,7 @@ def decompose_question_node(state: WorkflowState) -> WorkflowState:
         }
 
     except Exception as e:
-        logger.error(f"❌ Decomposition failed: {e}")
+        logger.error(f"❌ 问题拆解失败: {e}")
         # 失败回退：将原始问题作为一个子问题处理
         return {
             **state,
@@ -327,17 +329,18 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
     start_time = time.perf_counter()
     sub_questions = state.get("sub_questions", [])
 
-    logger.info(f"🔍 Supervisor: Checking cache for {len(sub_questions)} sub-questions")
+    logger.info(f"🔍 调度器：开始检查缓存，子问题数量={len(sub_questions)}")
 
     cache_hits = {}
     cache_confidences = {}
+    cache_seed_ids = {}
     sub_answers = {}
     total_hits = 0
 
     try:
         # 支持全局禁用缓存（用于对比测试）
         if not state.get("cache_enabled", True):
-            logger.info("🔀 Cache disabled - treating all as cache misses for comparison")
+            logger.info("🔀 缓存已关闭：本轮按全部未命中处理（用于对比）")
             updated_metrics = update_metrics(
                 state.get("metrics", initialize_metrics()),
                 cache_latency=0.0,
@@ -349,6 +352,7 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
                 **state,
                 "cache_hits": {sq: False for sq in sub_questions},
                 "cache_confidences": {sq: 0.0 for sq in sub_questions},
+                "cache_seed_ids": {sq: None for sq in sub_questions},
                 "execution_path": state["execution_path"] + ["cache_disabled"],
                 "metrics": updated_metrics,
             }
@@ -364,15 +368,17 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
                 confidence = (2.0 - result.vector_distance) / 2.0
                 cache_hits[sub_question] = True
                 cache_confidences[sub_question] = confidence
+                cache_seed_ids[sub_question] = result.seed_id
                 # 直接获取缓存中的答案
                 sub_answers[sub_question] = result.response
                 total_hits += 1
 
-                logger.info(f"   ✅ Cache HIT: '{sub_question[:40]}...' (confidence: {confidence:.3f})")
+                logger.info(f"   ✅ 缓存命中: '{sub_question[:40]}...' (置信度: {confidence:.3f})")
             else:
                 cache_hits[sub_question] = False
                 cache_confidences[sub_question] = 0.0
-                logger.info(f"   ❌ Cache MISS: '{sub_question[:40]}...'")
+                cache_seed_ids[sub_question] = None
+                logger.info(f"   ❌ 缓存未命中: '{sub_question[:40]}...'")
 
         cache_latency = (time.perf_counter() - start_time) * 1000
         hit_rate = total_hits / len(sub_questions) if sub_questions else 0
@@ -388,6 +394,7 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
             **state,
             "cache_hits": cache_hits,
             "cache_confidences": cache_confidences,
+            "cache_seed_ids": cache_seed_ids,
             # 将缓存命中的答案合并到子问题答案库中
             "sub_answers": {**state.get("sub_answers", {}), **sub_answers},
             "execution_path": state["execution_path"] + ["cache_checked"],
@@ -395,11 +402,12 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
         }
 
     except Exception as e:
-        logger.error(f"❌ Cache check failed: {e}")
+        logger.error(f"❌ 缓存检查失败: {e}")
         return {
             **state,
             "cache_hits": {sq: False for sq in sub_questions},
             "cache_confidences": {sq: 0.0 for sq in sub_questions},
+            "cache_seed_ids": {sq: None for sq in sub_questions},
             "execution_path": state["execution_path"] + ["cache_check_failed"],
         }
 
@@ -415,7 +423,7 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
     sub_questions = state.get("sub_questions", [])
     sub_answers = state.get("sub_answers", {})
 
-    logger.info(f"🔗 Supervisor: Synthesizing {len(sub_answers)} answers into final response")
+    logger.info(f"🔗 调度器：开始汇总答案，当前可用答案数={len(sub_answers)}")
 
     try:
         # 组装 Q&A 对作为上下文
@@ -425,28 +433,28 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
                 qa_pairs.append(f"Q: {sq}\nA: {sub_answers[sq]}")
 
         if not qa_pairs:
-            logger.warning("⚠️ No answers available for synthesis")
+            logger.warning("⚠️ 没有可用于汇总的答案")
             return {
                 **state,
-                "final_response": "I apologize, but I couldn't find answers to your question.",
+                "final_response": "抱歉，我暂时没有检索到可用答案。",
                 "execution_path": state["execution_path"] + ["synthesis_failed"],
             }
 
         # 最终汇总提示词
         synthesis_prompt = f"""
-        You are a helpful customer support assistant. Combine the following question-answer pairs 
-        into a single, coherent, and comprehensive response to the user's original query.
+        你是一名专业的中文客服助手。请将下列问答对整理成一段连贯、完整、自然的中文回复，
+        直接回答用户的原始问题。
         
-        Original query: {state['original_query']}
+        原始问题：{state['original_query']}
         
-        Information gathered:
+        已收集信息：
         {chr(10).join(qa_pairs)}
         
-        Provide a natural, conversational response.
+        输出要求：使用自然、清晰、礼貌的中文。
         """
 
         messages = [
-            SystemMessage(content="You are a helpful customer support assistant."),
+            SystemMessage(content="你是一名专业的中文客服助手。"),
             HumanMessage(content=synthesis_prompt),
         ]
 
@@ -481,10 +489,10 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
         }
 
     except Exception as e:
-        logger.error(f"❌ Response synthesis failed: {e}")
+        logger.error(f"❌ 答案汇总失败: {e}")
         return {
             **state,
-            "final_response": "I apologize, but I encountered an error while preparing your response.",
+            "final_response": "抱歉，在整理答案时发生了错误。",
             "execution_path": state["execution_path"] + ["synthesis_error"],
         }
 
@@ -501,13 +509,12 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
     sub_answers = state.get("sub_answers", {})
     cache_hits = state.get("cache_hits", {})
 
-    logger.info(f"🎯 Quality Evaluation: Evaluating research quality for {len(sub_answers)} answers")
+    logger.info(f"🎯 质量评估：开始评估 {len(sub_answers)} 条答案")
 
     quality_scores = state.get("research_quality_scores", {}).copy()
     feedback = state.get("research_feedback", {}).copy()
     needs_more_research = []
     llm_usage = list(state.get("llm_usage", []))
-    cache_writebacks = []
 
     llm_calls = state.get("llm_calls", {}).copy()
     research_llm = get_research_llm()
@@ -516,19 +523,19 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
         # 定义子问题评估函数（用于并行调用）
         def evaluate_sub_question(sub_question, answer, current_iteration):
             evaluation_prompt = f"""
-            Evaluate the quality and completeness of this research result for answering the user's question.
+            请评估这条研究结果是否足以回答用户问题。
             
-            Original sub-question: {sub_question}
-            Research result: {answer}
-            Research iteration: {current_iteration + 1}
+            子问题：{sub_question}
+            研究结果：{answer}
+            当前迭代：第 {current_iteration + 1} 轮
             
-            Provide:
-            1. A quality score from 0.0 to 1.0 (where 1.0 is perfect, 0.7+ is adequate)
-            2. Brief feedback on what's missing or could be improved (if score < 0.7)
+            请输出：
+            1. 质量分（0.0 到 1.0，1.0 最好，0.7 及以上视为合格）
+            2. 若低于 0.7，请给出简短改进建议
             
-            Format your response as:
+            输出格式必须严格为：
             SCORE: 0.X
-            FEEDBACK: [your feedback]
+            FEEDBACK: [改进建议]
             """
             
             try:
@@ -579,26 +586,9 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
                 feedback[sub_question] = feedback_text
                 
                 if score < 0.7:
-                    logger.info(f"   🔄 {sub_question[:40]}... - Score: {score:.2f} (Needs improvement)")
+                    logger.info(f"   🔄 {sub_question[:40]}... - 分数: {score:.2f}（需改进）")
                 else:
-                    logger.info(f"   ✅ {sub_question[:40]}... - Score: {score:.2f} - Adequate")
-
-                if score >= 0.7 and not cache_hits.get(sub_question, False):
-                    answer = sub_answers.get(sub_question, "")
-                    if answer and cache:
-                        try:
-                            cache.writeback_question_answer(sub_question, answer)
-                            cache_writebacks.append(sub_question)
-                            logger.info(
-                                "   💾 Cache writeback: '%s...' stored after quality check",
-                                sub_question[:40],
-                            )
-                        except Exception as writeback_error:
-                            logger.warning(
-                                "   ⚠️ Cache writeback skipped for '%s...': %s",
-                                sub_question[:40],
-                                writeback_error,
-                            )
+                    logger.info(f"   ✅ {sub_question[:40]}... - 分数: {score:.2f}（合格）")
 
         evaluation_time = (time.perf_counter() - start_time) * 1000
 
@@ -615,11 +605,10 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
             "llm_calls": llm_calls,
             "llm_usage": llm_usage,
             "metrics": updated_metrics,
-            "cache_writebacks": cache_writebacks,
         }
 
     except Exception as e:
-        logger.error(f"❌ Quality evaluation failed: {e}")
+        logger.error(f"❌ 质量评估失败: {e}")
         return {
             **state,
             "research_quality_scores": {sq: 0.8 for sq in sub_questions},
@@ -656,22 +645,22 @@ def research_node(state: WorkflowState) -> WorkflowState:
         model=research_llm, tools=[search_knowledge_base]
     )
 
-    logger.info("🔬 Research: Starting investigation with strategy adaptation")
+    logger.info("🔬 研究阶段：开始按策略执行检索")
 
     try:
         # 并行处理每个需要研究的子问题
         def process_research(sub_question):
             current_iteration = research_iterations.get(sub_question, 0)
             strategy = current_strategies.get(sub_question, "initial")
-            logger.info(f"🔍 Researching: '{sub_question[:50]}...' (iteration {current_iteration + 1})")
+            logger.info(f"🔍 正在研究：'{sub_question[:50]}...'（第 {current_iteration + 1} 轮）")
             
             research_prompt = sub_question
             # 如果是迭代改善阶段，注入质量评估的反馈
             if current_iteration > 0 and feedback.get(sub_question):
                 research_prompt = f"""
-                Previous research was insufficient. Feedback: {feedback[sub_question]}
-                Original question: {sub_question}
-                Please research this more thoroughly, focusing on the specific improvements mentioned.
+                上一轮研究结果不够充分。改进建议：{feedback[sub_question]}
+                原始问题：{sub_question}
+                请根据上述建议进行更深入的检索与补充。
                 """
             
             # 调用 ReAct Agent 进行研究
@@ -683,7 +672,7 @@ def research_node(state: WorkflowState) -> WorkflowState:
                 in_tokens, out_tokens = _extract_token_usage(last_msg)
                 return sub_question, "success", answer, current_iteration, in_tokens, out_tokens
             else:
-                return sub_question, "failure", "No info found.", current_iteration, 0, 0
+                return sub_question, "failure", "未检索到有效信息。", current_iteration, 0, 0
 
         tasks = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
@@ -735,7 +724,7 @@ def research_node(state: WorkflowState) -> WorkflowState:
         }
 
     except Exception as e:
-        logger.error(f"❌ Research failed: {e}")
+        logger.error(f"❌ 研究阶段失败: {e}")
         return {
             **state,
             "sub_answers": sub_answers,
@@ -746,11 +735,56 @@ def research_node(state: WorkflowState) -> WorkflowState:
 
 def decompose_query_node(state: WorkflowState) -> WorkflowState:
     """
-    工作流入口节点：将复杂问题拆分为可缓存、可并行处理的子问题。
-    
-    这是 decompose_question_node 的别名或包装函数，作为 Graph 定义中的入口。
+    工作流入口节点：按编号顺序准备子问题，不再进行 LLM 拆解。
+
+    规则：
+    - 如果原始问题里包含 "1."、"2." 这类编号行，则按出现顺序提取为子问题。
+    - 如果没有编号行，则将原始问题作为单个子问题处理。
+    - 后续缓存检查/研究节点仍可并行执行，以降低端到端延迟。
     """
-    logger.info("🧠 Decomposing query...")
-    state = decompose_question_node(state)
-    logger.info("🧠 Query decomposition complete")
-    return state
+    start_time = time.perf_counter()
+    query = state["original_query"]
+
+    logger.info("🧠 入口节点：按编号顺序准备子问题（不做拆解）")
+
+    numbered_questions: List[str] = []
+    for raw_line in query.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # 匹配如 "1. 问题"、"2) 问题"、"3、问题" 的常见编号格式
+        matched = re.match(r"^\d+\s*[\.|\)|、]\s*(.+)$", line)
+        if matched:
+            question = matched.group(1).strip()
+            if question:
+                numbered_questions.append(question)
+
+    sub_questions = numbered_questions or [query.strip()]
+
+    research_iterations = {sq: 0 for sq in sub_questions}
+    research_quality_scores = {sq: 0.0 for sq in sub_questions}
+    research_feedback = {sq: "" for sq in sub_questions}
+    current_research_strategy = {sq: "initial" for sq in sub_questions}
+
+    preparation_time = (time.perf_counter() - start_time) * 1000
+    updated_metrics = update_metrics(
+        state.get("metrics", initialize_metrics()),
+        decomposition_latency=preparation_time,
+        sub_question_count=len(sub_questions),
+    )
+
+    logger.info("🧠 子问题准备完成：%d 条", len(sub_questions))
+    return {
+        **state,
+        "sub_questions": sub_questions,
+        "sub_answers": {},
+        "cache_hits": {},
+        "cache_confidences": {},
+        "cache_seed_ids": {},
+        "research_iterations": research_iterations,
+        "research_quality_scores": research_quality_scores,
+        "research_feedback": research_feedback,
+        "current_research_strategy": current_research_strategy,
+        "execution_path": state["execution_path"] + ["numbered_prepared"],
+        "metrics": updated_metrics,
+    }
