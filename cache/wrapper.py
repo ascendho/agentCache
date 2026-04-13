@@ -103,7 +103,7 @@ class SemanticCacheWrapper:
     def __init__(
         self,
         name: str = "semantic-cache",
-        # 这里又是0.3？？？
+        # 默认参数，程序实际运行时的绝对标准，由 .env 文件中的配置决定。
         distance_threshold: float = 0.3,
         ttl: int = 3600,
         redis_url: Optional[str] = None,

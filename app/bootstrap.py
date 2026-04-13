@@ -50,7 +50,7 @@ def _split_markdown_into_structured_chunks(markdown_text: str):
     return structured_chunks
 
 
-def create_knowledge_base():
+def init_app_knowledge_base():
     """构建演示用知识库并返回索引与向量模型。"""
     embeddings = HFTextVectorizer(model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     markdown_text = RAW_DOCS_MD_PATH.read_text(encoding="utf-8")
@@ -61,7 +61,7 @@ def create_knowledge_base():
         source_id="customer_support_docs",
         redis_url="redis://localhost:6379",
 
-        # 这里还是 True 嘛？
+        # 已经在文本切块阶段做了分层结构化，入库时不需要再切块了，否则会破坏原有的层级信息。
         skip_chunking=True,
     )
 

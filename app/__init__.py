@@ -1,4 +1,4 @@
-from .bootstrap import create_knowledge_base
+from .bootstrap import init_app_knowledge_base
 from .workflow_runner import run_workflow_scenarios
 
 __all__ = [

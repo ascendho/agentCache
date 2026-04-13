@@ -3,7 +3,7 @@
 import warnings
 from cache.llm_evaluator import set_ark_key
 from agent.graph import build_workflow
-from app.bootstrap import create_knowledge_base
+from app.bootstrap import init_app_knowledge_base
 from app.workflow_runner import run_workflow_scenarios
 from cache.bootstrap import setup_semantic_cache
 from utility.logging_setup import setup_logging
@@ -24,7 +24,7 @@ def main():
     # 负责把文本转成向量，检索时把用户 query 向量化
     # 注意：当前建库时，create_knowledge_base_from_texts 内部也会再创建一个默认向量器用于入库向量生成
     # （同模型名，两个实例），主流程返回的 embeddings 主要用于“在线查询向量化”。
-    kb_index, embeddings = create_knowledge_base()
+    kb_index, embeddings = init_app_knowledge_base()
 
     # 2) 初始化语义缓存：用于拦截相似问题，减少重复推理成本。
     logger.info("初始化语义缓存...")
