@@ -27,12 +27,7 @@ def initialize_edges(semantic_cache):
 
 def route_after_cache_check(state: Dict[str, Any]) -> Literal["research", "synthesize"]:
     """
-    Intelligent routing based on cache results.
     基于缓存结果的智能路由。
-
-    Determines whether we need to route to the researcher agent
-    (if cache misses exist) or can proceed directly to synthesis
-    (if all sub-questions were cached).
     确定是需要路由到研究员 Agent（如果存在缓存未命中），还是直接进行内容综合（如果所有子问题都已缓存）。
     
     返回逻辑：
@@ -62,11 +57,7 @@ def route_after_quality_evaluation(
     state: Dict[str, Any],
 ) -> Literal["research", "synthesize"]:
     """
-    Intelligent routing after quality evaluation - decide if more research is needed.
     质量评估后的智能路由 - 决定是否需要进行更多研究。
-
-    Determines whether we need additional research iterations for inadequate answers
-    or can proceed to synthesis with the current research quality.
     确定我们是需要由于回答不充分进行额外的研究迭代，还是可以基于当前的研究质量直接综合结果。
     """
     # 获取各个子问题的质量评分、当前迭代次数和最大允许迭代次数
@@ -103,8 +94,6 @@ def route_after_quality_evaluation(
 
 def cache_validated_research(state: Dict[str, Any]):
     """
-    Cache research results that have passed quality validation.
-    This ensures we only cache high-quality, validated responses.
     缓存通过质量验证的研究结果。
     此操作能确保我们只缓存高质量且经验证的回复。
     """

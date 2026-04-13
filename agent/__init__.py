@@ -1,6 +1,5 @@
 """
 Deep research Agent 工作流包。
-
 该包提供了带语义缓存的完整 Agent 工作流实现，包含查询拆解、研究检索、
 质量评估与条件路由。
 """
@@ -81,7 +80,7 @@ def run_agent(agent, query: str, enable_caching: bool = True) -> Dict[str, Any]:
 
     # 初始化工作流状态（State）：这是整个 Graph 执行过程中流转的数据结构
     initial_state: WorkflowState = {
-        "original_query": query,               # 原始问题
+        "original_query": query,              # 原始问题
         "sub_questions": [],                  # 拆解后的子问题列表
         "sub_answers": {},                    # 子问题的答案存储
         "cache_hits": {},                     # 每个子问题的缓存命中情况
@@ -236,8 +235,9 @@ def analyze_agent_results(results):
     from IPython.display import display
     
     # 定义模拟的三个阶段场景
+    # ！！！！！！！！！！需要修改，现在已经不同了
     scenario_names = [
-        "Enterprise Evaluation", # 企业评估阶段
+        "Enterprise Evaluation",   # 企业评估阶段
         "Implementation Planning", # 实施规划阶段
         "Final Review",            # 最终审查阶段
     ]

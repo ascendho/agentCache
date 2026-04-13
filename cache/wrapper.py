@@ -76,12 +76,12 @@ def try_connect_to_redis(redis_url: str):
     try:
         r = redis.Redis.from_url(redis_url)
         r.ping()
-        print("✅ Redis is running and accessible!")
+        print("✅ Redis 正在运行且可访问!")
     except redis.ConnectionError:
         print(
             """
-            ❌ Cannot connect to Redis. Please make sure Redis is running on localhost:6379
-                Try: docker run -d --name redis -p 6379:6379 redis/redis-stack:latest
+            ❌ 无法连接到 Redis。请确保 Redis 在 localhost:6379 上运行
+                尝试: docker run -d --name redis -p 6379:6379 redis/redis-stack:latest
             """
         )
         raise
@@ -103,6 +103,7 @@ class SemanticCacheWrapper:
     def __init__(
         self,
         name: str = "semantic-cache",
+        # 这里又是0.3？？？
         distance_threshold: float = 0.3,
         ttl: int = 3600,
         redis_url: Optional[str] = None,
@@ -182,26 +183,57 @@ class SemanticCacheWrapper:
         return_id_map: bool = False,
     ) -> Optional[Dict[str, int]]:
         """
-        从 DataFrame 批量预加载缓存。
+        语义缓存预热 (Cache Warm-up) 核心函数：从 DataFrame 批量加载 FAQ 基础数据。
+        常用于系统冷启动时，将高频标准问题（头部问题）提前注入 Redis 语义缓存，
+        实现第一道拦截，大幅降低 LLM 的 API 成本与响应延迟。
 
-        适用于 FAQ/历史问答预热场景；可选返回 question->id 映射，
-        便于后续对照分析。
+        Args:
+            df (pd.DataFrame): 包含预设 FAQ 数据的表格。
+            q_col (str): 存放“标准问题/用户提问”的列名，默认 "question"。
+            a_col (str): 存放“标准答案/对应回复”的列名，默认 "answer"。
+            clear (bool): 加载前是否清空当前缓存池。默认 True（推荐，避免旧版本脏数据污染）。
+            ttl_override (int, optional): 强制覆盖缓存条目的存活时间（TTL，单位为秒）。
+                                          💡 提示：预装的 FAQ 通常应该设置为永久有效。
+                                          传入 None 通常意味着让底层库使用“永不过期”策略。
+            return_id_map (bool): 是否返回 问题->ID 的映射字典，常用于后续的缓存命中率 (Hit Rate) 评测分析。
+
+        Returns:
+            Optional[Dict[str, int]]: 如果 return_id_map 为 True，则返回 {问题文本: 唯一ID}。
         """
+
+        # 1. 缓存池重置：清空旧有记忆，确保加载的是最新版的 FAQ 规则
         if clear:
             self.cache.clear()
+
         self._seed_id_by_question = {}
         question_to_id: Dict[str, int] = {}
+        
+        # 尝试获取表格中自有的 ID 列，如果没有，则后备使用循环的索引 (idx) 作为 ID
         id_col = "id" if "id" in df.columns else None
+
+        # 2. 遍历加载：将 DataFrame 转换为字典列表进行批量迭代
         for idx, row in enumerate(df.to_dict(orient="records")):
             q = row[q_col]
             a = row[a_col]
+
+            # 3. 核心写入操作：调用底层的向量引擎，将问题(prompt)转化为 Semantic Vector，
+            #    连同答案(response)一起作为 Key-Value 存入 Redis。
+            #
+            # 答疑：是的，预装 FAQ 理论上应永久有效。
+            # 如果不传 ttl_override (即保持 None)，Redis 默认不会为该键设置 EXPIRE，
+            # 从而实现“打底知识库”的长久驻留，与 LLM 动态生成的短期长尾答案（如 3600s）形成区隔。
             self.cache.store(prompt=q, response=a, ttl=ttl_override)
+            
+            # 4. 建立索引映射：记录当前问题分配到的最终 ID (seed_id)
             seed_id = int(row[id_col]) if id_col and row.get(id_col) is not None else idx
             self._seed_id_by_question[str(q)] = seed_id
+
             if return_id_map and q not in question_to_id:
                 question_to_id[q] = seed_id
-        return question_to_id if return_id_map else None
 
+        # 5. 返回溯源字典，方便外部调用者评估哪个基础 FAQ 被命中得最多
+        return question_to_id if return_id_map else None
+    
     def hydrate_from_pairs(
         self,
         pairs: Iterable[Tuple[str, str]],
@@ -230,7 +262,6 @@ class SemanticCacheWrapper:
     def register_reranker(self, reranker: Callable[[str, List[dict]], List[dict]]):
         """
         注册重排序函数。
-
         函数签名应为：
             reranker(query: str, candidates: List[dict]) -> List[dict]
 

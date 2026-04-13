@@ -1,6 +1,5 @@
 """
 深度研究工作流的工具模块。
-
 该模块负责知识库语义检索的具体实现：
 1) 将自然语言查询转为向量嵌入（Embedding）；
 2) 在 Redis 向量索引中执行向量近邻搜索（Vector Search）；
@@ -31,7 +30,6 @@ def initialize_tools(
 ):
     """
     初始化工具模块所需的依赖项。
-
     由于 LangChain 的 @tool 装饰器通常定义为全局函数，
     我们通过此初始化函数动态注入当前请求所需的知识库索引和向量模型。
 
@@ -48,7 +46,6 @@ def initialize_tools(
 def search_knowledge_base(query: str, top_k: int = 3) -> str:
     """
     在 Redis 向量知识库中搜索与问题最相关的信息片段。
-
     这是供 Agent 调用的标准工具。它能够将查询语句转化为向量，
     并在索引中寻找语义最接近的文本块。
 

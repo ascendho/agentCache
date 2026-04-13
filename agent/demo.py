@@ -1,6 +1,5 @@
 """
 Deep Research Agent 的简洁 Gradio 演示界面。
-
 该模块用于演示“网页内容抽取 + 知识库构建 + 语义缓存问答”的完整流程，
 依赖 Tavily API 完成网页正文抽取。
 """

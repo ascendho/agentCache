@@ -18,7 +18,6 @@ from .tools import initialize_tools
 def initialize_agent(semantic_cache, knowledge_base_index, openai_embeddings):
     """
     初始化 Agent 运行所需的全部依赖组件。
-
     包括：节点（Nodes）、路由逻辑（Edges）以及检索工具（Tools）。
     
     Args:
@@ -34,7 +33,6 @@ def initialize_agent(semantic_cache, knowledge_base_index, openai_embeddings):
 def build_workflow(cache, kb_index, embeddings):
     """
     构建并编译 LangGraph 工作流。
-
     该函数定义了状态机的拓扑结构，即数据如何在各个处理节点之间流转。
     流程图预览：
     [开始] -> 按编号准备子问题 -> 缓存检查 
@@ -68,7 +66,7 @@ def build_workflow(cache, kb_index, embeddings):
     # 条件分支：根据缓存命中的结果决定去向
     workflow.add_conditional_edges(
         "check_cache",
-        route_after_cache_check, # 路由逻辑函数
+        route_after_cache_check,         # 路由逻辑函数
         {
             "research": "research",      # 如果有缓存未命中，跳转到研究节点
             "synthesize": "synthesize",  # 如果全部命中，直接跳转到最后的综合节点
@@ -81,7 +79,7 @@ def build_workflow(cache, kb_index, embeddings):
     # 条件分支：根据研究结果的质量决定是否需要补充研究
     workflow.add_conditional_edges(
         "evaluate_quality",
-        route_after_quality_evaluation, # 路由逻辑函数
+        route_after_quality_evaluation,  # 路由逻辑函数
         {
             "research": "research",      # 质量不佳且未达迭代上限，返回研究节点（形成循环）
             "synthesize": "synthesize",  # 质量合格或已达最大迭代，进入综合节点

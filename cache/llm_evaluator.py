@@ -26,7 +26,7 @@ def set_ark_key():
     """确保 ARK_API_KEY（火山引擎/方舟）可用；若缺失则交互式输入。"""
     load_env()
     if not os.getenv("ARK_API_KEY"):
-        api_key = getpass.getpass("Enter your ARK API key: ")
+        api_key = getpass.getpass("请输入你的 ARK API key: ")
         os.environ["ARK_API_KEY"] = api_key
 
 class SimilarityResult(BaseModel):

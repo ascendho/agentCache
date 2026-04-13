@@ -60,6 +60,15 @@ def create_knowledge_base():
         texts=raw_docs,
         source_id="customer_support_docs",
         redis_url="redis://localhost:6379",
+
+        # 这里还是 True 嘛？
         skip_chunking=True,
     )
+
+    # embeddings 是一个加载了神经网络权重（MiniLM 模型）的 Python 对象。
+    # 作用：它提供了一个 embed_query() 方法，可以将输入文本转换为向量（数字数组），以便在 Redis 向量数据库中进行相似度搜索。
+
+    # kb_index 是一个“检索器对象”或者说是“向量数据库的索引连接器”。
+    # 它脑子里记住了整个 Redis 数据库中所有文档片段（Chunks）的位置。
+    # 作用：你给它一串数字（向量），它跑到 Redis 里算出最接近的几个文本块，然后原封不动地拿回来给你。
     return kb_index, embeddings
