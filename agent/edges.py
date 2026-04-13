@@ -29,7 +29,7 @@ def route_after_cache_check(state: Dict[str, Any]) -> Literal["research", "synth
     """
     基于缓存结果的智能路由。
     确定是需要路由到研究员 Agent（如果存在缓存未命中），还是直接进行内容综合（如果所有子问题都已缓存）。
-    
+
     返回逻辑：
     - "research": 只要有一个子问题没被缓存命中，就需要启动检索/研究流程。
     - "synthesize": 所有子问题都从缓存拿到了答案，直接进行最终汇总。

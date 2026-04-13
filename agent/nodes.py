@@ -127,7 +127,6 @@ class WorkflowMetrics(TypedDict):
 class WorkflowState(TypedDict):
     """
     带语义缓存和质量评估的 Agent 工作流状态定义。
-    
     该字典贯穿整个 LangGraph 执行过程，存储所有中间结果。
     """
     original_query: str              # 用户的原始提问
@@ -314,7 +313,6 @@ def decompose_question_node(state: WorkflowState) -> WorkflowState:
 def check_cache_node(state: WorkflowState) -> WorkflowState:
     """
     节点：独立检查每个子问题的语义缓存。
-    
     逻辑：遍历所有子问题，在 Redis 语义缓存中进行向量相似度检索。
     Workflow 位置：拆解节点之后。
     关键：如果置信度（Confidence）高于阈值，则认为命中，直接获取答案，无需调用昂贵的搜索/LLM。
@@ -411,7 +409,6 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
 def synthesize_response_node(state: WorkflowState) -> WorkflowState:
     """
     节点：将各部分的子答案汇总成一段连贯、全面的最终回答。
-    
     逻辑：将缓存命中的答案和新研究出的答案按照原始子问题顺序排列，
     交给 LLM 进行润色和整合，确保语气自然且直接回答了用户的原始提问。
     """
@@ -496,7 +493,6 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
 def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
     """
     节点：在综合答案前评估研究结果的质量和充分性。
-    
     逻辑：使用 LLM 作为裁判，对每一个新研究出的答案进行打分 (0.0-1.0)。
     如果得分低于 0.7，会提供具体反馈，触发下一轮研究迭代。
     """
@@ -617,7 +613,6 @@ def evaluate_quality_node(state: WorkflowState) -> WorkflowState:
 def research_node(state: WorkflowState) -> WorkflowState:
     """
     节点：执行研究逻辑，支持策略调整和迭代。
-    
     逻辑：仅处理“缓存未命中”的子问题。
     使用 create_react_agent 创建一个带工具调用能力的智能体，调用 search_knowledge_base 工具从 Redis 中检索。
     如果是第二轮迭代，会结合上一轮的反馈（Feedback）生成更深入的搜索指令。
