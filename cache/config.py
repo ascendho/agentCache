@@ -1,26 +1,10 @@
-import getpass
 import os
-from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
 # 注：Python 原生的 os.getenv() 不会自动去读取 .env 文件。
 # 加载 .env 文件，将其中定义的变量注入到环境变量中（不指定具体路径，依靠 “自动寻路”/向上冒泡 机制）
 load_dotenv()
-
-def load_ark_key():
-    """
-    从环境变量加载 ARK API 密钥，如果不存在则提示用户输入。
-    注：ARK API 通常用于访问火山引擎（字节跳动）提供的 LLM 服务。
-    """
-    if not os.getenv("ARK_API_KEY"):
-        # 如果环境变量中没有该 Key，则在终端安全地提示用户输入（输入内容不可见）
-        api_key = getpass.getpass("请输入你的 ARK API key: ")
-        os.environ["ARK_API_KEY"] = api_key
-    else:
-        # 如果已经存在，则提示已加载
-        print("> ARK API key 已经加载到环境变量中")
-
 
 # 系统全局配置字典
 # 这些参数决定了 Redis 的连接方式以及语义缓存的敏感度

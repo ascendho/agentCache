@@ -23,9 +23,9 @@ def export_results(all_results: List[Dict], output_dir: str = "outputs") -> Dict
             fieldnames=[
                 "scenario_index",
                 "original_query",
-                "sub_questions_count",
-                "cache_hits",
-                "cache_hit_rate",
+                "cache_hit",
+                "cache_confidence",
+                "research_iterations",
                 "analysis_llm_calls",
                 "research_llm_calls",
                 "total_latency_ms",
@@ -35,22 +35,21 @@ def export_results(all_results: List[Dict], output_dir: str = "outputs") -> Dict
         writer.writeheader()
 
         for idx, result in enumerate(all_results, 1):
-            sub_questions = result.get("sub_questions", [])
-            cache_hits_map = result.get("cache_hits", {})
-            hits = sum(1 for v in cache_hits_map.values() if v)
-            total_sq = len(sub_questions)
-            hit_rate = (hits / total_sq) if total_sq else 0.0
+            cache_hit = result.get("cache_hit", False)
+            cache_confidence = result.get("cache_confidence", 0.0)
+            research_iterations = result.get("research_iterations", 0)
 
             llm_calls = result.get("llm_calls", {})
-            total_latency = str(result.get("total_latency", "0ms")).replace("ms", "")
+            metrics = result.get("metrics", {})
+            total_latency = f"{metrics.get('total_latency', 0):.0f}"
 
             writer.writerow(
                 {
                     "scenario_index": idx,
-                    "original_query": result.get("original_query", ""),
-                    "sub_questions_count": total_sq,
-                    "cache_hits": hits,
-                    "cache_hit_rate": f"{hit_rate:.4f}",
+                    "original_query": result.get("query", ""),
+                    "cache_hit": str(cache_hit),
+                    "cache_confidence": f"{cache_confidence:.4f}",
+                    "research_iterations": research_iterations,
                     "analysis_llm_calls": llm_calls.get("analysis_llm", 0),
                     "research_llm_calls": llm_calls.get("research_llm", 0),
                     "total_latency_ms": total_latency,

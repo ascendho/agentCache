@@ -1,13 +1,12 @@
 # 运行指令：python main.py
 
 import warnings
-from cache.llm_evaluator import set_ark_key
-from agent.graph import build_workflow
+from utility.env import set_ark_key, to_bool_env
+from agent.graph import create_agent_graph
 from app.bootstrap import init_app_knowledge_base
 from app.workflow_runner import run_workflow_scenarios
 from cache.bootstrap import setup_semantic_cache
 from utility.logging_setup import setup_logging
-from utility.env import to_bool_env
 
 def main():
     """程序入口：完成初始化、执行场景测试并统计缓存表现。"""
@@ -32,7 +31,7 @@ def main():
 
     # 3) 组装工作流：节点、路由、工具在这里被编排成可执行图。
     logger.info("构建 LangGraph 工作流...")
-    workflow_app = build_workflow(cache, kb_index, embeddings)
+    workflow_app = create_agent_graph(cache, kb_index, embeddings)
 
     # 4) 依次执行三个场景，观察命中率随对话推进是否提升。
     show_console_results = to_bool_env("SHOW_CONSOLE_RESULTS", False)

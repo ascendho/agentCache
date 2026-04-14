@@ -1,3 +1,4 @@
+import re
 """
 知识库工具模块。
 提供从文本快速构建 Redis 向量知识库的简化能力。
@@ -80,18 +81,18 @@ class KnowledgeBaseManager:
                         metadata = raw_meta if isinstance(raw_meta, dict) else {}
                         normalized_chunks.append({"content": chunk_content, "metadata": metadata})
                     else:
-                        logger.warning(f"Unsupported chunk type in list: {type(item)}")
+                        logger.warning(f"列表中不支持的块类型: {type(item)}")
 
                 text_chunks = normalized_chunks
                 has_structured_metadata = any(chunk.get("metadata") for chunk in text_chunks)
                 source_type = "structured_list" if has_structured_metadata else "text_list"
-                logger.info(f"Using provided list of {len(text_chunks)} text chunks")
+                logger.info(f"使用提供的 {len(text_chunks)} 个文本块列表")
             elif isinstance(content, str):
                 if skip_chunking:
                     # 不切片，直接作为单条记录
                     text_chunks = [{"content": content, "metadata": {}}]
                     source_type = "text_single"
-                    logger.info("Using entire text as single chunk")
+                    logger.info("将整个文本作为一个数据块")
                 else:
                     # 使用 LangChain 的递归字符切片器，尝试按段落、句子保留语境
                     splitter = RecursiveCharacterTextSplitter(
@@ -106,12 +107,12 @@ class KnowledgeBaseManager:
                         for chunk in doc_chunks
                     ]
                     source_type = "text_chunked"
-                    logger.info(f"Split text into {len(text_chunks)} chunks")
+                    logger.info(f"将文本切分为 {len(text_chunks)} 个数据块")
             else:
                 return False, f"Unsupported content type: {type(content)}", None
             
             # --- 步骤 2: 定义 Redis 向量索引 Schema ---
-            # 包含：文本内容、来源 ID、来源类型、切片索引以及 1536 维的向量字段
+            # 包含：文本内容、来源 ID、来源类型、切片索引以及 384 维的向量字段
             schema = {
                 "index": {"name": index_name, "prefix": f"kb:{source_hash}:"},
                 "fields": [
@@ -163,7 +164,7 @@ class KnowledgeBaseManager:
                         "content_vector": embedding,
                     })
                 except Exception as e:
-                    logger.warning(f"Failed to embed chunk {i}: {e}")
+                    logger.warning(f"数据块 {i} 向量化失败: {e}")
                     continue
             
             if not payload:
@@ -181,7 +182,7 @@ class KnowledgeBaseManager:
                 "created_at": time.time()
             }
             
-            success_msg = f"✅ Created knowledge base with {len(text_chunks)} chunks ({source_type})"
+            success_msg = f"✅ 知识库创建成功，包含 {len(text_chunks)} 个数据块 ({source_type})"
             logger.info(success_msg)
             return True, success_msg, kb_index
             
@@ -190,73 +191,6 @@ class KnowledgeBaseManager:
             logger.error(error_msg)
             return False, error_msg, None
     
-    def get_index_for_source(self, source_id: str) -> Optional[SearchIndex]:
-        """通过 source_id 获取对应的 Redis 搜索索引对象"""
-        source_hash = hashlib.md5(source_id.encode()).hexdigest()[:8]
-        index_info = self.active_indexes.get(source_hash)
-        return index_info["index"] if index_info else None
-    
-    def get_index_for_url(self, url: str) -> Optional[SearchIndex]:
-        """通过 URL 获取索引（get_index_for_source 的别名，用于向后兼容）"""
-        return self.get_index_for_source(url)
-    
-    def clear_knowledge_base(self, source_id: str = None) -> str:
-        """
-        清空知识库索引。
-        
-        Args:
-            source_id: 指定要删除的 source_id。如果为 None，则清空所有已注册的索引。
-            
-        Returns:
-            操作状态消息。
-        """
-        try:
-            if source_id:
-                # 删除特定的索引
-                source_hash = hashlib.md5(source_id.encode()).hexdigest()[:8]
-                if source_hash in self.active_indexes:
-                    index_info = self.active_indexes[source_hash]
-                    index_info["index"].drop() # 物理删除 Redis 中的索引和数据
-                    del self.active_indexes[source_hash]
-                    return f"✅ Cleared knowledge base for {source_id}"
-                else:
-                    return f"⚠️ No knowledge base found for {source_id}"
-            else:
-                # 遍历并清空所有索引
-                cleared_count = 0
-                for source_hash, index_info in list(self.active_indexes.items()):
-                    try:
-                        index_info["index"].drop()
-                        cleared_count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to clear index {source_hash}: {e}")
-                
-                self.active_indexes.clear()
-                return f"✅ Cleared {cleared_count} knowledge bases"
-                
-        except Exception as e:
-            error_msg = f"❌ Clear operation failed: {e}"
-            logger.error(error_msg)
-            return error_msg
-    
-    def get_status(self) -> Dict[str, Any]:
-        """获取所有当前活跃知识库的状态和元数据。"""
-        status = {
-            "total_indexes": len(self.active_indexes),
-            "indexes": []
-        }
-        
-        for source_hash, index_info in self.active_indexes.items():
-            status["indexes"].append({
-                "source_hash": source_hash,
-                "source_id": index_info["source_id"],
-                "source_type": index_info["source_type"],
-                "chunks": index_info["chunks"],
-                "created_at": index_info["created_at"],
-                "age_seconds": time.time() - index_info["created_at"]
-            })
-        
-        return status
 
 def create_knowledge_base_from_texts(
     texts: List[Union[str, Dict[str, Any]]],
@@ -279,3 +213,43 @@ def create_knowledge_base_from_texts(
     redis_client = redis.Redis.from_url(redis_url, decode_responses=False)
     kb_manager = KnowledgeBaseManager(redis_client)
     return kb_manager.create_knowledge_base(source_id, texts, skip_chunking=skip_chunking)
+
+def _split_markdown_into_structured_chunks(markdown_text: str):
+    from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+    """按 Markdown 层级切块，并对超长段落进行递归兜底切块。"""
+    headers_to_split_on = [
+        ("#", "header_1"),
+        ("##", "header_2"),
+        ("###", "header_3"),
+    ]
+    header_splitter = MarkdownHeaderTextSplitter(
+        headers_to_split_on=headers_to_split_on,
+        strip_headers=True,
+    )
+    header_docs = header_splitter.split_text(markdown_text)
+
+    recursive_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=80,
+        separators=["\n\n", "\n", "。", "！", "？", " ", ""],
+    )
+
+    structured_chunks = []
+    for doc in header_docs:
+        child_docs = recursive_splitter.split_documents([doc])
+        for child in child_docs:
+            content = child.page_content.strip()
+            if not content:
+                continue
+            metadata = {
+                "header_1": child.metadata.get("header_1", ""),
+                "header_2": child.metadata.get("header_2", ""),
+                "header_3": child.metadata.get("header_3", ""),
+                "is_announcement": bool(
+                    re.search(r"(?m)^\s*>", content)
+                    or "最新系统公告" in content
+                    or "黑五" in content and "补偿" in content
+                ),
+            }
+            structured_chunks.append({"content": content, "metadata": metadata})
+    return structured_chunks

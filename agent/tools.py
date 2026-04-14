@@ -7,7 +7,6 @@
 """
 
 import logging
-import numpy as np
 from typing import Any
 
 from langchain_core.tools import tool
@@ -62,7 +61,7 @@ def search_knowledge_base(query: str, top_k: int = 3) -> str:
         return "错误：知识库尚未初始化，请先调用 initialize_tools()。"
 
     logger.info(
-        f"🔍 Using search_knowledge_base tool for query: '{query}' (top_k={top_k})"
+        f"🔍 使用 search_knowledge_base 工具检索:: '{query}' (top_k={top_k})"
     )
 
     try:
@@ -122,5 +121,5 @@ def search_knowledge_base(query: str, top_k: int = 3) -> str:
 
     except Exception as e:
         # 捕获检索过程中的任何异常（如 Redis 连接中断、索引不存在等）
-        logger.error(f"Error during KB search: {e}")
+        logger.error(f"知识库检索期间发生错误: {e}")
         return f"知识库检索异常：{str(e)}"
