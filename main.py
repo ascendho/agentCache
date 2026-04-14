@@ -1,40 +1,68 @@
 # 运行指令：python main.py
+# 本脚本是系统的总入口，负责组装所有模块并启动演示场景。
 
-import warnings
-from common.env import set_ark_key, to_bool_env
-from workflow.graph import create_agent_graph
-from knowledge.builder import init_app_knowledge_base
-from testing.runner import run_workflow_scenarios
-from semantic_cache.auto_heater import setup_semantic_cache
-from common.logger import setup_logging
+import warnings  # 导入告警管理模块
+from common.env import set_ark_key, to_bool_env  # 导入环境变量设置与类型转换工具
+from workflow.graph import create_agent_graph  # 导入工作流图构建函数
+from knowledge.builder import init_app_knowledge_base  # 导入知识库构建工具
+from testing.runner import run_workflow_scenarios  # 导入测试运行器
+from semantic_cache.auto_heater import setup_semantic_cache  # 导入语义缓存预热逻辑
+from common.logger import setup_logging  # 导入日志配置工具
 
 def main():
-    """程序入口：完成初始化、执行场景测试并统计缓存表现。"""
+    """
+    程序主入口：
+    按照 引导 -> 初始化 -> 构建 -> 执行 的顺序完成 AI 智能体系统的启动。
+    """
+    # 忽略不影响程序运行的库告警（如 LangChain 或 RedisVL 的弃用提示），保持终端整洁
     warnings.simplefilter("ignore")
+    
+    # 从配置文件或系统变量中读取并设置火山引擎（Ark）的 API 密钥
     set_ark_key()
+    
+    # 初始化全局日志系统，后续所有模块的 logger 都会按照此配置输出
     logger = setup_logging()
 
-    # 1) 创建知识库：把原始文本写入向量索引，供后续检索。
-    logger.info("初始化知识库...")
+    # ---------------------------------------------------------
+    # 步骤 1) 初始化 RAG 知识库
+    # ---------------------------------------------------------
+    # 将原始 Markdown 文本进行切块、向量化并写入 Redis 向量索引。
+    logger.info("初始化知识库 (RAG Vector Store)...")
 
-    # kb_index 是 Redis 向量索引对象（SearchIndex 实例），
-    # 代表“已经建好的知识库索引”，真正使用时在检索工具里做 query 查询
-    # embeddings 是向量化模型对象（HFTextVectorizer），
-    # 负责把文本转成向量，检索时把用户 query 向量化
-    # 注意：当前建库时，create_knowledge_base_from_texts 内部也会再创建一个默认向量器用于入库向量生成
-    # （同模型名，两个实例），主流程返回的 embeddings 主要用于“在线查询向量化”。
+    # kb_index: Redis 向量索引对象（SearchIndex 实例）。
+    #           它像是一个“带索引的图书馆”，负责执行底层的向量相似度检索。
+    # embeddings: 向量化模型对象（HFTextVectorizer 实例）。
+    #           它是“翻译官”，负责将用户的中文提问转换成计算机能理解的 1024 维向量。
     kb_index, embeddings = init_app_knowledge_base()
 
-    # 2) 初始化语义缓存：用于拦截相似问题，减少重复推理成本。
-    logger.info("初始化语义缓存...")
+    # ---------------------------------------------------------
+    # 步骤 2) 初始化语义缓存 (Semantic Cache)
+    # ---------------------------------------------------------
+    # 语义缓存用于拦截意思相近的重复提问，直接返回答案，无需经过大模型推理。
+    logger.info("初始化语义缓存 (Semantic Cache)...")
+    
+    # cache 实例包含了 Redis 连接和预加载的 FAQ 种子数据。
     cache = setup_semantic_cache()
 
-    # 3) 组装工作流：节点、路由、工具在这里被编排成可执行图。
-    logger.info("构建 LangGraph 工作流...")
+    # ---------------------------------------------------------
+    # 步骤 3) 构建 LangGraph 智能体计算图
+    # ---------------------------------------------------------
+    # 将业务节点（缓存检查、研究、评估、合成）和路由逻辑编排成一个状态机。
+    logger.info("构建 LangGraph 工作流计算图...")
+    
+    # 注入前面初始化的缓存和知识库组件，生成可执行的 Workflow 对象
     workflow_app = create_agent_graph(cache, kb_index, embeddings)
 
-    # 4) 依次执行三个场景，观察命中率随对话推进是否提升。
+    # ---------------------------------------------------------
+    # 步骤 4) 运行场景化测试
+    # ---------------------------------------------------------
+    # 从环境变量读取配置：是否在控制台打印详细的 JSON 运行结果（默认不打印）
     show_console_results = to_bool_env("SHOW_CONSOLE_RESULTS", False)
+    
+    # 执行预设的测试场景：
+    # 场景 1: 直接提问（命中 FAQ 缓存）
+    # 场景 2: 复杂研究提问（触发 RAG 检索）
+    # 场景 3: 相似提问（验证 RAG 结果是否已动态自动存入缓存并被成功拦截）
     run_workflow_scenarios(
         workflow_app=workflow_app,
         logger=logger,
@@ -42,4 +70,5 @@ def main():
     )
 
 if __name__ == "__main__":
+    # 只有当本脚本作为主程序运行时，才调用 main 函数
     main()
