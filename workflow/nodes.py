@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
-from agent.tools import search_knowledge_base
+from workflow.tools import search_knowledge_base
 
 logger = logging.getLogger("agentic-workflow")
 

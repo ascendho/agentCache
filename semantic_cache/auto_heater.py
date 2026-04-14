@@ -1,6 +1,6 @@
-from cache.config import config
-from cache.faq_data_container import FAQDataContainer
-from cache.wrapper import SemanticCacheWrapper
+from semantic_cache.config import config
+from semantic_cache.faq_data_container import FAQDataContainer
+from semantic_cache.engine import SemanticCacheWrapper
 
 
 def setup_semantic_cache():

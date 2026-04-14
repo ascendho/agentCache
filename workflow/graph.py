@@ -1,7 +1,7 @@
 import logging
 from langgraph.graph import StateGraph, END
 
-from agent.nodes import (
+from workflow.nodes import (
     WorkflowState,
     initialize_nodes,
     check_cache_node,
@@ -9,8 +9,8 @@ from agent.nodes import (
     evaluate_quality_node,
     synthesize_response_node,
 )
-from agent.edges import cache_router, research_quality_router
-from agent.tools import initialize_tools
+from workflow.edges import cache_router, research_quality_router
+from workflow.tools import initialize_tools
 
 def create_agent_graph(semantic_cache=None, kb_index=None, embeddings=None) -> StateGraph:
     """初始化并构建LangGraph计算图"""

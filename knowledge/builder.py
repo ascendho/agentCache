@@ -4,7 +4,7 @@ from pathlib import Path
 from redisvl.utils.vectorize import HFTextVectorizer
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
-from agent.knowledge_base_utils import create_knowledge_base_from_texts, _split_markdown_into_structured_chunks
+from knowledge.indexer import create_knowledge_base_from_texts, _split_markdown_into_structured_chunks
 
 RAW_DOCS_MD_PATH = Path(__file__).resolve().parents[1] / "data" / "raw_docs.md"
 

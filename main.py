@@ -1,12 +1,12 @@
 # 运行指令：python main.py
 
 import warnings
-from utility.env import set_ark_key, to_bool_env
-from agent.graph import create_agent_graph
-from app.bootstrap import init_app_knowledge_base
-from app.workflow_runner import run_workflow_scenarios
-from cache.bootstrap import setup_semantic_cache
-from utility.logging_setup import setup_logging
+from common.env import set_ark_key, to_bool_env
+from workflow.graph import create_agent_graph
+from knowledge.builder import init_app_knowledge_base
+from testing.runner import run_workflow_scenarios
+from semantic_cache.auto_heater import setup_semantic_cache
+from common.logger import setup_logging
 
 def main():
     """程序入口：完成初始化、执行场景测试并统计缓存表现。"""

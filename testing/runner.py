@@ -1,14 +1,6 @@
-import logging
-from typing import Any, Dict, List
-
-logger = logging.getLogger("agentic-workflow")
-
-from .graph import create_agent_graph
-
-__all__ = ["create_agent_graph", "run_agent", "display_results", "analyze_agent_results", "get_cache_metrics"]
-
+from typing import Dict, Any
 def run_agent(workflow_app, query: str) -> Dict[str, Any]:
-    from agent.nodes import initialize_metrics
+    from workflow.nodes import initialize_metrics
     import time
     from datetime import datetime
     
@@ -78,7 +70,7 @@ def analyze_agent_results(results: list) -> tuple:
     analysis_data = []
     
     try:
-        from app.scenarios import SCENARIO_RUNS
+        from testing.scenarios import SCENARIO_RUNS
         scenario_names = [s.get("title", f"Scenario_{i}") for i, s in enumerate(SCENARIO_RUNS)]
     except ImportError:
         scenario_names = [f"Scenario_{i+1}" for i in range(len(results))]
@@ -155,3 +147,46 @@ def analyze_agent_results(results: list) -> tuple:
         logger.error(f"图表生成失败: {str(e)}")
 
     return total_queries, total_cache_hits
+
+
+from typing import Any, Dict
+
+from common.logger import setup_logging
+logger = setup_logging()
+
+try:
+    from testing.scenarios import SCENARIO_RUNS
+except ImportError:
+    SCENARIO_RUNS = []
+from testing.scenarios import SCENARIO_RUNS
+from testing.exporter import export_results
+
+
+def run_workflow_scenarios(
+    workflow_app: Any,
+    logger,
+    show_console_results: bool = False,
+) -> Dict[str, Any]:
+    """运行场景、导出结果并输出分析日志。"""
+    all_results = []
+    for scenario in SCENARIO_RUNS:
+        logger.info("运行场景：%s", scenario["title"])
+        result = run_agent(workflow_app, scenario["query"])
+        all_results.append(result)
+        if show_console_results:
+            display_results(result)
+
+    export_paths = export_results(all_results)
+    logger.info("结果已导出 | 场景汇总=%s", export_paths["summary_csv"])
+    logger.info("结果已导出 | 全量JSON=%s", export_paths["result_json"])
+
+    logger.info("分析 Agent 性能...")
+    total_questions, total_cache_hits = analyze_agent_results(all_results)
+    logger.info("子问题总数: %s, 缓存命中总数: %s", total_questions, total_cache_hits)
+
+    return {
+        "results": all_results,
+        "exports": export_paths,
+        "total_questions": total_questions,
+        "total_cache_hits": total_cache_hits,
+    }

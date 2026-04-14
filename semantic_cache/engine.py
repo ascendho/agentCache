@@ -101,9 +101,8 @@ class SemanticCacheWrapper:
         # 1. 重置缓存池，防止旧版本脏数据污染
         if clear:
             # 物理清空整个向量索引和相关数据（只针对语义缓存，不影响知识库库）
-            if self.cache.index.exists():
-                self.cache.index.delete(drop=True)
-            self.cache.index.create(overwrite=True, drop=False)
+            print("正在彻底清空旧语义缓存数据...")
+            self.cache.clear()
             self.embeddings_cache.clear()
             
         self._seed_id_by_question = {}
