@@ -46,3 +46,5 @@ dump.rdb
 
 # 忽略运行产物
 outputs/
+
+*.log
