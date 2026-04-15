@@ -44,7 +44,7 @@ def init_app_knowledge_base():
     # 4. 创建知识库并将数据持久化到 Redis
     # 返回值中的前两个变量通常是内部 ID，此处用下划线 _ 忽略，只保留 kb_index
     _, _, kb_index = create_knowledge_base_from_texts(
-        texts=raw_docs,                         # 经过切分后的结构化文档块
+        texts=raw_docs,                          # 经过切分后的结构化文档块
         source_id="customer_support_docs",       # 给这份数据打上标签，标识为“客户支持文档”
         redis_url="redis://localhost:6379",      # Redis 服务器地址
 

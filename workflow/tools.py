@@ -39,9 +39,9 @@ def initialize_tools(
         knowledge_base_index: 已连接并配置好的 RedisVL SearchIndex 实例。
         openai_embeddings: 已加载权重的向量化模型实例（如 BGE 或 OpenAI Embedding）。
     """
-    global kb_index, embeddings  # 申明使用全局变量
+    global kb_index, embeddings      # 申明使用全局变量
     kb_index = knowledge_base_index  # 注入索引实例
-    embeddings = openai_embeddings  # 注入模型实例
+    embeddings = openai_embeddings   # 注入模型实例
 
 
 @tool

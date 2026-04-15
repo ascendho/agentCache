@@ -15,6 +15,8 @@ config = dict(
     # 1. Redis 连接配置
     # 格式通常为: redis://[[username]:[password]]@host:port/db
     # 如果环境变量中没设置 REDIS_URL，则默认连接本地默认端口。
+
+    # redis_url 在 builder.py 里面也存在，都考虑用 env 读取吧，或者统一提前写入？减少冗余代码
     redis_url=os.getenv("REDIS_URL", "redis://localhost:6379"),
     
     # 2. 语义缓存的逻辑命名空间
@@ -37,5 +39,7 @@ config = dict(
     # 意义：
     # a) 节省 Redis 内存，自动清理老旧、低频的缓存数据。
     # b) 保证时效性：防止 FAQ 文档更新后，缓存里还存着一个小时前的旧答案。
+
+    # 这个配置有必要嘛？因为我们每次运行 main.py 的时候都会清空缓存 
     ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "3600")),
 )

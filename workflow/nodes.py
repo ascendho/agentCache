@@ -18,26 +18,28 @@ _research_llm = None
 def get_analysis_llm():
     """获取用于逻辑分析和质量评估的 LLM 实例（低随机性，重逻辑）"""
     global _analysis_llm
-    if _analysis_llm is None:  # 如果尚未初始化
+    # 如果尚未初始化
+    if _analysis_llm is None:  
         _analysis_llm = ChatOpenAI(
-            model="ep-m-20260411093114-9hftc",         # 指定模型端点 ID
-            temperature=0.1,                           # 设置低随机性，确保评估结果稳定
-            max_tokens=400,                            # 限制输出长度
-            api_key=os.getenv("ARK_API_KEY"),         # 从环境变量获取 API 密钥
-            base_url="https://ark.cn-beijing.volces.com/api/v3" # 指向火山引擎提供的 API 地址
+            model="ep-m-20260411093114-9hftc",                   # 指定模型端点 ID
+            temperature=0.1,                                     # 设置低随机性，确保评估结果稳定
+            max_tokens=400,                                      # 限制输出长度
+            api_key=os.getenv("ARK_API_KEY"),                    # 从环境变量获取 API 密钥
+            base_url="https://ark.cn-beijing.volces.com/api/v3"  # 指向火山引擎提供的 API 地址
         )
     return _analysis_llm
 
 def get_research_llm():
     """获取用于信息研究和文本生成的 LLM 实例（稍高随机性，重生成）"""
     global _research_llm
-    if _research_llm is None:  # 如果尚未初始化
+    # 如果尚未初始化
+    if _research_llm is None:  
         _research_llm = ChatOpenAI(
-            model="deepseek-v3-2-251201",             # 指定使用 DeepSeek 模型
-            temperature=0.2,                           # 设置适度的创造性
-            max_tokens=400,                            # 限制输出长度
-            api_key=os.getenv("ARK_API_KEY"),         # 共享 API 密钥
-            base_url="https://ark.cn-beijing.volces.com/api/v3" # 指向 API 基础路径
+            model="deepseek-v3-2-251201",                        # 指定使用 DeepSeek 模型
+            temperature=0.2,                                     # 设置适度的创造性
+            max_tokens=400,                                      # 限制输出长度
+            api_key=os.getenv("ARK_API_KEY"),                    # 共享 API 密钥
+            base_url="https://ark.cn-beijing.volces.com/api/v3"  # 指向 API 基础路径
         )
     return _research_llm
 
@@ -123,6 +125,8 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
         answer = ""
     else:
         # 在 Redis 中执行语义检索，设定阈值为 0.2
+
+        # 这里阈值是硬编码的！！！！也可以根据实际需求调整或动态设置，统一一下
         results = _cache_instance.check(query, distance_threshold=0.2)
         if results.matches:  # 如果找到了足够相似的历史记录
             best_match = results.matches[0]
@@ -205,14 +209,15 @@ def research_node(state: WorkflowState) -> WorkflowState:
     for _ in range(3):
         response = llm_with_tools.invoke(messages) # 调用 LLM 询问是否需要用工具
         messages.append(response)
-        if not response.tool_calls:  # 如果 LLM 不再需要调用工具，跳出循环
+        if not response.tool_calls:                # 如果 LLM 不再需要调用工具，跳出循环
             break
-        for tool_call in response.tool_calls:  # 遍历 LLM 提出的工具调用请求
+        for tool_call in response.tool_calls:      # 遍历 LLM 提出的工具调用请求
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
             try:
                 logger.info(f"   🔧 执行工具: {tool_name} {tool_args}")
-                tool_result = tools[0].invoke(tool_args) # 执行检索工具
+                # 执行检索工具
+                tool_result = tools[0].invoke(tool_args) 
             except Exception as e:
                 tool_result = f"Error executing tool: {e}"
             from langchain_core.messages import ToolMessage
@@ -283,6 +288,7 @@ FEEDBACK: [如果分数低于0.7，给出如何改进搜索策略的建议，否
                 feedback = line.split("FEEDBACK:")[1].strip()
     except Exception:
         # 解析失败时的兜底策略
+        # 这样做正确嘛？如果评估模型输出格式不符合预期，导致解析失败，我们暂时假设结果是合格的（score=0.8），并给出一个通用的改进建议。这样可以避免因为评估环节的异常而导致整个工作流崩溃，同时也能提供一些指导性的反馈信息。
         score = 0.8
         feedback = "解析异常，假设合格"
         

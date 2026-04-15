@@ -18,6 +18,7 @@ def cache_router(state) -> Literal["synthesize_response", "research"]:
     
     if cache_hit:
         # 命中缓存的情况：快速路径，直接生成最终回答
+        # :20 是什么意思？为了日志输出的简洁性，我们只显示查询的前 20 个字符，后面用省略号表示。这有助于在日志中快速识别问题的主题，同时避免输出过长的文本导致日志混乱。
         logger.info(f"👉 路由: 缓存命中，跳过研究节点 -> '{query[:20]}...'")
         return "synthesize_response"
     else:
@@ -35,9 +36,9 @@ def research_quality_router(state) -> Literal["synthesize_response", "research"]
     3. 如果质量不达标，但还没超过最大尝试次数，则退回研究节点重新搜索。
     4. 如果超过了最大尝试次数，为防止死循环，强制进入响应合成（尽可能基于现有资料回答）。
     """
-    query = state["query"]  # 获取原始提问
-    score = state.get("research_quality_score", 0.0)      # 获取当前的资料质量得分 (0.0-1.0)
-    iterations = state.get("research_iterations", 1)      # 当前是第几次研究循环
+    query = state["query"]                                   # 获取原始提问
+    score = state.get("research_quality_score", 0.0)         # 获取当前的资料质量得分 (0.0-1.0)
+    iterations = state.get("research_iterations", 1)         # 当前是第几次研究循环
     max_iterations = state.get("max_research_iterations", 1) # 允许的最大研究循环次数
     
     if score >= 0.7:

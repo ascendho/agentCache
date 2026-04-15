@@ -27,7 +27,7 @@ def main():
     # 步骤 1) 初始化 RAG 知识库
     # ---------------------------------------------------------
     # 将原始 Markdown 文本进行切块、向量化并写入 Redis 向量索引。
-    logger.info("初始化知识库 (RAG Vector Store)...")
+    logger.info("初始化知识库 ......")
 
     # kb_index: Redis 向量索引对象（SearchIndex 实例）。
     #           它像是一个“带索引的图书馆”，负责执行底层的向量相似度检索。
@@ -39,7 +39,7 @@ def main():
     # 步骤 2) 初始化语义缓存 (Semantic Cache)
     # ---------------------------------------------------------
     # 语义缓存用于拦截意思相近的重复提问，直接返回答案，无需经过大模型推理。
-    logger.info("初始化语义缓存 (Semantic Cache)...")
+    logger.info("初始化语义缓存 ......")
     
     # cache 实例包含了 Redis 连接和预加载的 FAQ 种子数据。
     cache = setup_semantic_cache()

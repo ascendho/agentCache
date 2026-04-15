@@ -71,6 +71,7 @@ def try_connect_to_redis(redis_url: str):
 # ==========================================
 
 class SemanticCacheWrapper:
+    # 这些参数是不是又重复在 config.py 里了？感觉有点冗余了，或者说 config.py 里就直接写死好了，毕竟现在也没什么变化的需求
     def __init__(self, name: str = "semantic-cache", distance_threshold: float = 0.3, ttl: int = 3600, redis_url: Optional[str] = None):
         """
         初始化语义缓存引擎。
@@ -84,11 +85,14 @@ class SemanticCacheWrapper:
            - 收益：实现“意思相近即命中”，绕过大模型生成，直接秒回答案。
         """
         # 确定 Redis 连接地址，默认为本地
+        # 又重复了！双重缓存什么意思，没看懂呢
         redis_conn_url = redis_url or "redis://localhost:6379"
         self.redis = try_connect_to_redis(redis_conn_url)
         
         # --- 初始化第 1 层：EmbeddingsCache ---
         # 存活时间设为语义缓存的 24 倍（向量计算结果较稳定，建议长期保存）
+
+        # ttl 有必要吗？因为我们每次运行 main.py 的时候都会清空缓存
         self.embeddings_cache = EmbeddingsCache(redis_client=self.redis, ttl=ttl * 24)
         
         # --- 初始化向量模型加载器 ---
@@ -97,16 +101,17 @@ class SemanticCacheWrapper:
         
         # --- 初始化第 2 层：SemanticCache ---
         self.cache = SemanticCache(
-            name=name,                             # 索引名称，区分不同业务逻辑
-            vectorizer=self.langcache_embed,       # 指定文本转向量的驱动器
-            redis_client=self.redis,               # 数据库连接
-            distance_threshold=distance_threshold,  # 判定阈值：越小代表越严格（0.1代表基本要一字不差）
-            ttl=ttl                                # 缓存自动过期时间
+            name=name,                              # 索引名称，区分不同业务逻辑
+            vectorizer=self.langcache_embed,        # 指定文本转向量的驱动器
+            redis_client=self.redis,                # 数据库连接
+            distance_threshold=distance_threshold,  # 判定阈值：越小代表越严格（0.1 代表基本要一字不差）
+            ttl=ttl                                 # 缓存自动过期时间
         )
         
         # 内部状态：用于在当前生命周期内快速回溯问题与原始数据 ID 的关系
         self._seed_id_by_question: Dict[str, int] = {}
 
+    # 此函数感觉有点冗余？意义在哪里？
     @classmethod
     def from_config(cls, config) -> "SemanticCacheWrapper":
         """
@@ -132,6 +137,7 @@ class SemanticCacheWrapper:
             ttl_override: 预热数据的有效期。如果为 None，则继承初始化时的默认 TTL。
             return_id_map: 是否返回一个“问题 -> ID”的映射字典。
         """
+        # 这个预处理是不是不应该写在此函数里面？感觉职责有点不单一了，或者说这个函数就专门负责灌注，至于要不要清空缓存应该由调用方决定，这样更灵活一些
         # 1. 预处理：根据需要清理旧数据，防止新旧逻辑冲突
         if clear:
             print("正在彻底清空旧语义缓存数据与向量特征缓存...")
