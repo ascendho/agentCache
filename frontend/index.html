@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Support Agent</title>
+    <!-- Google Fonts & Tailwind -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="bg-[#f8f9fa] font-sans h-screen flex flex-col antialiased text-gray-800">
+    <!-- Header -->
+    <header class="bg-white/80 backdrop-blur-md shadow-sm border-b border-gray-100 z-10 relative">
+        <div class="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
+            <h1 class="text-xl font-semibold tracking-tight text-gray-900">电商客服支持智能体</h1>
+            <div class="flex items-center space-x-3">
+                <span class="text-xs font-medium text-gray-400 uppercase tracking-wider">Access</span>
+                <input 
+                    type="password" 
+                    id="access-code" 
+                    placeholder="Enter code" 
+                    class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-black/5 w-32 transition-all disabled:bg-gray-50 disabled:text-gray-400 shadow-sm"
+                />
+                <button id="save-key-btn" class="bg-gray-900 hover:bg-black text-white rounded-lg px-3 py-1.5 text-sm font-medium transition-all shadow-sm focus:ring-2 focus:ring-gray-300 focus:outline-none flex items-center cursor-pointer">
+                    保存 ✅
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Chat Container -->
+    <main class="flex-1 max-w-4xl mx-auto w-full flex flex-col pt-4 overflow-hidden relative pb-32">
+        <div id="chat-box" class="flex-1 overflow-y-auto px-6 pb-6 space-y-6">
+            <!-- Initial Bot Message -->
+            <div class="flex w-full mt-2 space-x-4 max-w-2xl">
+                <div class="flex-shrink-0 mt-1 h-9 w-9 rounded-full bg-gradient-to-tr from-gray-700 to-gray-900 flex items-center justify-center shadow-md">
+                    <span class="text-white font-medium text-sm">A</span>
+                </div>
+                <div class="flex flex-col">
+                    <div class="bg-white p-4 rounded-2xl rounded-tl-sm shadow-sm border border-gray-100 text-gray-700 text-[15px] leading-relaxed">
+                        您好！我是本平台的电商客服支持智能体，基于 RedisVL 的高速缓存防刷。仅回答平台相关问题。<br/><br/><span class="text-gray-400 text-sm">请在顶部输入邀请码并保存后向我提问体验。</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Area Fixed Bottom -->
+        <div class="absolute bottom-0 w-full bg-gradient-to-t from-[#f8f9fa] via-[#f8f9fa] to-transparent pt-8 pb-6 px-4">
+            <div class="max-w-4xl mx-auto flex flex-col items-center">
+                <!-- Persistent Quick Action Pills -->
+                <div class="flex w-full space-x-2 flex-wrap gap-y-2 mb-4 justify-center" id="quick-actions">
+                    <button class="quick-pill bg-white/80 backdrop-blur border border-gray-200 text-gray-600 hover:border-gray-900 hover:text-gray-900 text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
+                        你们支持几天无理由退换？
+                    </button>
+                    <button class="quick-pill bg-white/80 backdrop-blur border border-gray-200 text-gray-600 hover:border-gray-900 hover:text-gray-900 text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
+                        退货运费谁出？
+                    </button>
+                    <button class="quick-pill bg-white/80 backdrop-blur border border-gray-200 text-gray-600 hover:border-gray-900 hover:text-gray-900 text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
+                        填错地址了能改吗？
+                    </button>
+                    <button class="quick-pill bg-white/80 backdrop-blur border border-gray-200 text-gray-600 hover:border-gray-900 hover:text-gray-900 text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
+                        怎么联系人工？
+                    </button>
+                    <button class="quick-pill bg-white/80 backdrop-blur border border-gray-200 text-gray-600 hover:border-gray-900 hover:text-gray-900 text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
+                        支持海外发货吗？
+                    </button>
+                </div>
+                
+                <div class="w-full bg-white shadow-lg rounded-2xl border border-gray-200/60 flex items-center px-5 py-3 relative overflow-hidden transition-shadow focus-within:shadow-xl focus-within:border-gray-300">
+                    <input 
+                        type="text" 
+                        id="user-input" 
+                        placeholder="Ask me anything..." 
+                        class="flex-1 bg-transparent border-none outline-none text-gray-900 placeholder-gray-400 py-1 text-[15px]"
+                        autocomplete="off"
+                    />
+                    <button id="send-btn" class="ml-3 bg-gray-900 hover:bg-black text-white rounded-xl p-2.5 h-10 w-10 flex items-center justify-center transition-all shadow-sm active:scale-95">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-4 h-4 translate-x-0.5">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>

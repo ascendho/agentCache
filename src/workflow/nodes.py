@@ -4,9 +4,10 @@ import time     # 导入时间模块，用于性能耗时统计
 from datetime import datetime  # 导入日期时间模块
 from typing import Any, Dict, List, Optional, TypedDict  # 导入类型提示，增强代码可读性和健壮性
 
-from langchain_core.messages import HumanMessage  # 导入 LangChain 的人类消息对象
+from langchain_core.messages import HumanMessage, SystemMessage  # 导入 LangChain 的消息对象
 from langchain_openai import ChatOpenAI           # 导入 LangChain 的 OpenAI 兼容模型接口
 from workflow.tools import search_knowledge_base  # 导入自定义的知识库检索工具
+from workflow.prompts import SYSTEM_PROMPT, RESEARCH_PROMPT_WITH_FEEDBACK, RESEARCH_PROMPT_INITIAL, EVAL_PROMPT
 from common.env import CACHE_DISTANCE_THRESHOLD, ARK_BASE_URL, ANALYSIS_MODEL_NAME, RESEARCH_MODEL_NAME
 
 # 获取名为 "agentic-workflow" 的日志记录器
@@ -113,28 +114,40 @@ def initialize_nodes(sys_cache):
 import re
 
 def pre_check_node(state: WorkflowState) -> WorkflowState:
-    """节点：前置拦截器（第零道防线）拦截时效性问题和特定商品型号查询"""
+    """节点：前置拦截器（第零道防线）拦截时效性问题和特定商品型号查询等"""
     query = state["query"]
     logger.info(f"🛡️ 执行前置拦截检查: '{query}'")
     
-    # 1. 检查时效性问题（如“现在”、“目前”、“最新”、“库存”、“今天”）
-    time_sensitive_keywords = ["现在", "目前", "最新", "库存", "今天", "这几天"]
-    is_time_sensitive = any(kw in query for kw in time_sensitive_keywords)
+    # 1. 检查时效性问题（基于 jieba 词性分析自动提取时间实体）
+    import jieba.posseg as pseg
+    is_time_sensitive = False
+    time_entities = []
     
-    # 2. 检查特定商品型号（使用正则匹配，如 F2026-1-2，匹配 字母+数字-数字 结构）
-    # 例如：以一个或多个字母开头，跟着数字，然后带有横杠的型号
+    for word, flag in pseg.cut(query):
+        # flag 为 't' 或 'tg' 表示时间词
+        if flag.startswith('t'):
+            is_time_sensitive = True
+            time_entities.append(word)
+            
+    if is_time_sensitive:
+        logger.info(f"   ⏱️ 提取到时间实体: {time_entities}")
+    
+    # 2. 检查特定商品型号（使用正则匹配）
     product_model_pattern = re.compile(r'[a-zA-Z]+\d+(?:-\d+)+')
     mentions_product_model = bool(product_model_pattern.search(query))
     
-    if is_time_sensitive or mentions_product_model:
-        logger.warning(f"   ⛔ 拦截触发: 时间敏感={is_time_sensitive}, 特定商品={mentions_product_model}")
-        canned_response = "抱歉，我们这个助手无法获取具体的实时库存或商品型号信息。"
+    # 将库存作为业务关键词判断补齐（因为jieba时间判断不会涵盖它）
+    mentions_inventory = "库存" in query
+    
+    if is_time_sensitive or mentions_product_model or mentions_inventory:
+        logger.warning(f"   ⛔ 拦截触发: 时间实体={time_entities}, 特定商品={mentions_product_model}, 库存={mentions_inventory}")
+        canned_response = "抱歉，我们这个助手无法获取具体的实时信息（如动态时间查询、实时库存或某些精确具体的商品型号信息）。"
         return {
             **state,
             "answer": canned_response,
             "final_response": canned_response,
             "intercepted": True,
-            "execution_path": state.get("execution_path", []) + ["pre_check_intercepted"],
+            "execution_path": state.get("execution_path", []) + ["pre_check_intercepted"]
         }
     
     logger.info("   ✅ 通过前置检查，放行")
@@ -226,7 +239,10 @@ def research_node(state: WorkflowState) -> WorkflowState:
     # 绑定工具到 LLM
     llm_with_tools = get_research_llm().bind_tools(tools)
     llm_base = get_research_llm()  # 获取原始模型用于最终生成
-    messages = [HumanMessage(content=research_prompt)] # 初始化对话列表
+    messages = [
+        SystemMessage(content=SYSTEM_PROMPT), 
+        HumanMessage(content=research_prompt)
+    ] # 初始化对话列表
     
     # --- 模拟 ReAct 循环：最多允许 3 次工具调用交互 ---
     for _ in range(3):
