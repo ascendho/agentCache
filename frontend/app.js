@@ -144,7 +144,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Handle quick pills (Persistent)
     quickPills.forEach(pill => {
         pill.addEventListener('click', (e) => {
-            const presetTxt = e.target.textContent.trim();
+            const presetTxt = e.currentTarget.lastElementChild ? e.currentTarget.lastElementChild.textContent.trim() : e.currentTarget.textContent.trim();
             handleSend(presetTxt);
         });
     });
@@ -285,10 +285,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 </svg>
             </div>
             <div class="flex flex-col flex-1 mr-8">
-                <div class="bg-white dark:bg-gray-800 p-4 py-5 rounded-2xl rounded-tl-sm shadow-sm border border-gray-100 dark:border-gray-700 flex space-x-1.5 items-center transition-colors duration-300">
-                    <div class="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-pulse"></div>
-                    <div class="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-pulse delay-75"></div>
-                    <div class="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-pulse delay-150"></div>
+                <div class="p-4 py-5 flex items-center space-x-2 transition-colors duration-300 text-indigo-500 dark:text-purple-400">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="url(#sparkle-gradient)" stroke="none">
+                      <defs>
+                        <linearGradient id="sparkle-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stop-color="#8b5cf6" />
+                          <stop offset="100%" stop-color="#3b82f6" />
+                        </linearGradient>
+                      </defs>
+                      <path d="M12 2L14.6 9.4L22 12L14.6 14.6L12 22L9.4 14.6L2 12L9.4 9.4L12 2Z" />
+                    </svg>
+                    <span class="text-[15px] font-medium tracking-wide animate-pulse bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600 dark:from-indigo-400 dark:to-purple-500">
+                        Thinking...
+                    </span>
                 </div>
             </div>
         `;
