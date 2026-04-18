@@ -104,10 +104,10 @@ def update_metrics(metrics: WorkflowMetrics, **kwargs) -> WorkflowMetrics:
 # 全局语义缓存实例占位符
 _cache_instance = None
 
-def initialize_nodes(semantic_cache):
+def initialize_nodes(sys_cache):
     """初始化节点，注入语义缓存实例"""
     global _cache_instance
-    _cache_instance = semantic_cache
+    _cache_instance = sys_cache
 
 def check_cache_node(state: WorkflowState) -> WorkflowState:
     """节点：检查语义缓存（第一道防线）"""
@@ -303,6 +303,15 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
             logger.info(f"   💾 将高质量的回答写入语义缓存: '{state['query'][:20]}...'")
             # 下次如果有类似问题，就能直接从缓存拿，不再消耗大模型 token
             _cache_instance.cache.store(prompt=state["query"], response=state["answer"])
+            
+            # 手动维护内存字典供 fuzzy_matches 短路使用
+            if not hasattr(_cache_instance, '_seed_id_by_question'):
+                _cache_instance._seed_id_by_question = {}
+            if not hasattr(_cache_instance, '_answer_by_question'):
+                _cache_instance._answer_by_question = {}
+                
+            _cache_instance._seed_id_by_question[state["query"]] = None
+            _cache_instance._answer_by_question[state["query"]] = state["answer"]
     
     # 合成耗时统计
     synth_time = (time.perf_counter() - start_time) * 1000

@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional
 import redis
+import difflib
 from pydantic import BaseModel
 from redisvl.extensions.cache.embeddings import EmbeddingsCache
 from redisvl.extensions.cache.llm import SemanticCache
@@ -49,6 +50,7 @@ class SemanticCacheWrapper:
             distance_threshold=CACHE_DISTANCE_THRESHOLD
         )
         self._seed_id_by_question: Dict[str, int] = {}
+        self._answer_by_question: Dict[str, str] = {}
 
     def clear(self):
         """物理清空整个向量索引和相关数据"""
@@ -67,6 +69,7 @@ class SemanticCacheWrapper:
         self.cache.clear()
         self.embeddings_cache.clear()
         self._seed_id_by_question = {}
+        self._answer_by_question = {}
 
     def store_batch(self, qa_pairs: List[Dict], clear: bool = True):
         """
@@ -82,8 +85,25 @@ class SemanticCacheWrapper:
             # 使用底层原生接口写入
             self.cache.store(prompt=q, response=a)
             self._seed_id_by_question[str(q)] = seed_id
+            self._answer_by_question[str(q)] = a
 
     def check(self, query: str, distance_threshold: Optional[float] = None, num_results: int = 1) -> CacheResults:
+        # ===== 前置短路拦截：基于 difflib 的字符串精确/模糊匹配 =====
+        fuzzy_matches = difflib.get_close_matches(query, self._seed_id_by_question.keys(), n=1, cutoff=0.85)
+        if fuzzy_matches:
+            matched_q = fuzzy_matches[0]
+            print(f"⚡ [短路拦截] difflib 模糊命中: '{query}' -> '{matched_q}'")
+            return CacheResults(query=query, matches=[
+                CacheResult(
+                    prompt=matched_q,
+                    response=self._answer_by_question[matched_q],
+                    vector_distance=0.0,
+                    cosine_similarity=1.0,
+                    seed_id=self._seed_id_by_question.get(matched_q)
+                )
+            ])
+        # =========================================================
+        
         candidates = self.cache.check(query, distance_threshold=distance_threshold, num_results=num_results)
         
         if not candidates:

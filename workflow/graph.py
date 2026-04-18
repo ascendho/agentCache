@@ -15,7 +15,7 @@ from workflow.edges import cache_router, research_quality_router
 # 导入工具初始化函数：主要用于初始化向量数据库检索工具
 from workflow.tools import initialize_tools
 
-def create_agent_graph(semantic_cache=None, kb_index=None, embeddings=None) -> StateGraph:
+def create_agent_graph(sys_cache=None, kb_index=None, embeddings=None) -> StateGraph:
     """
     初始化并构建 LangGraph 计算图。
     
@@ -28,7 +28,7 @@ def create_agent_graph(semantic_cache=None, kb_index=None, embeddings=None) -> S
     
     # --- 基础组件初始化 ---
     # 将语义缓存实例注入节点逻辑中
-    initialize_nodes(semantic_cache)
+    initialize_nodes(sys_cache)
     # 如果提供了知识库索引和向量模型，则初始化相关的搜索工具
     if kb_index and embeddings:
         initialize_tools(kb_index, embeddings)

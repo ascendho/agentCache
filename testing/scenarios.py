@@ -1,39 +1,26 @@
+import json
+import os
+
 """测试场景模块。"""
 
-# 场景 1：主要询问未在FAQ中的问题（极少命中缓存）
-SCENARIO_1_QUERIES = [
-    "购买电子产品有保修吗？",
-    "购买的商品可以开具增值税发票吗？",
-    "你们支持几天无理由退换货？",
-    "我想做代理商，怎么和你们合作？",
-    "购买大件家具包邮吗？"
-]
-
-# 场景 2：新旧问题混合（命中缓存增加，因为复用了场景1的缓存和FAQ）
-SCENARIO_2_QUERIES = [
-    "可以给商品开具发票吗？",
-    "贴身内衣能退换吗？",
-    "我买的一本书有缺页，能退吗？",
-    "今年双十一有什么活动或者优惠吗？",
-    "具体的价保政策是怎样的？"
-]
-
-# 场景 3：回顾之前所有问题和FAQ（应该大部分或全部命中缓存）
-SCENARIO_3_QUERIES = [
-    "我购买了一台冰箱，保修期是多久？",
-    "怎么和你们合作成为代理商？",
-    "新买的书有质量问题（少了一页），能退吗？",
-    "已经过了7天了，还支持价保吗？",
-    "今年双十一的价格会降低吗？"
-]
+# 加载独立的测试数据文件
+_data_path = os.path.join(os.path.dirname(__file__), "..", "data", "test_scenarios.json")
+try:
+    with open(_data_path, "r", encoding="utf-8") as f:
+        _test_data = json.load(f)
+except FileNotFoundError:
+    print(f"⚠️ 测试数据文件缺失: {_data_path}")
+    _test_data = {}
 
 SCENARIO_RUNS = []
 
-for i, q in enumerate(SCENARIO_1_QUERIES, 1):
-    SCENARIO_RUNS.append({"title": f"场景1-问题{i}", "query": q})
+# 动态构建所有的测试场景
+def _load_scenario(key_name, title_prefix):
+    queries = _test_data.get(key_name, [])
+    for i, q in enumerate(queries, 1):
+        SCENARIO_RUNS.append({"title": f"{title_prefix}-问题{i}", "query": q})
 
-for i, q in enumerate(SCENARIO_2_QUERIES, 1):
-    SCENARIO_RUNS.append({"title": f"场景2-问题{i}", "query": q})
-
-for i, q in enumerate(SCENARIO_3_QUERIES, 1):
-    SCENARIO_RUNS.append({"title": f"场景3-问题{i}", "query": q})
+_load_scenario("SCENARIO_1_QUERIES", "场景1")
+_load_scenario("SCENARIO_2_QUERIES", "场景2")
+_load_scenario("SCENARIO_3_QUERIES", "场景3")
+_load_scenario("SCENARIO_4_FUZZY_QUERIES", "场景4(模糊测试)")

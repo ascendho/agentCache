@@ -1,7 +1,7 @@
-from semantic_cache.faq_data_container import FAQDataContainer
-from semantic_cache.engine import SemanticCacheWrapper
+from cache.faq_data_container import FAQDataContainer
+from cache.engine import SemanticCacheWrapper
 
-def setup_semantic_cache():
+def setup_cache():
     """
     初始化语义缓存系统，并使用预定义的 FAQ 数据进行索引预热。
     """
