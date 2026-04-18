@@ -4,37 +4,141 @@ document.addEventListener('DOMContentLoaded', () => {
     const sendBtn = document.getElementById('send-btn');
     const accessCodeInput = document.getElementById('access-code');
     const saveKeyBtn = document.getElementById('save-key-btn');
+    const togglePwdBtn = document.getElementById('toggle-pwd-btn');
+    const accessInputWrapper = document.getElementById('access-input-wrapper');
+    const verifiedBadge = document.getElementById('verified-badge');
+    const themeToggleBtn = document.getElementById('theme-toggle-btn');
+    const themeToggleLightIcon = document.getElementById('theme-toggle-light-icon');
+    const themeToggleDarkIcon = document.getElementById('theme-toggle-dark-icon');
     const quickActions = document.getElementById('quick-actions');
     const quickPills = document.querySelectorAll('.quick-pill');
 
     // API Backend url - when deploying, switch to your remote url e.g. https://my-agent.zeabur.app/chat
     const API_URL = 'http://127.0.0.1:8000/chat';
 
+    // Theme Management
+    if (localStorage.getItem('color-theme') === 'dark') {
+        document.documentElement.classList.add('dark');
+        themeToggleLightIcon.classList.remove('hidden');
+    } else {
+        document.documentElement.classList.remove('dark');
+        themeToggleDarkIcon.classList.remove('hidden');
+    }
+
+    themeToggleBtn.addEventListener('click', () => {
+        themeToggleDarkIcon.classList.toggle('hidden');
+        themeToggleLightIcon.classList.toggle('hidden');
+        if (localStorage.getItem('color-theme')) {
+            if (localStorage.getItem('color-theme') === 'light') {
+                document.documentElement.classList.add('dark');
+                localStorage.setItem('color-theme', 'dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+                localStorage.setItem('color-theme', 'light');
+            }
+        } else {
+            if (document.documentElement.classList.contains('dark')) {
+                document.documentElement.classList.remove('dark');
+                localStorage.setItem('color-theme', 'light');
+            } else {
+                document.documentElement.classList.add('dark');
+                localStorage.setItem('color-theme', 'dark');
+            }
+        }
+    });
+
+    // Password Eye Toggle
+    togglePwdBtn.addEventListener('click', () => {
+        const type = accessCodeInput.getAttribute('type') === 'password' ? 'text' : 'password';
+        accessCodeInput.setAttribute('type', type);
+        // Switch SVG based on type
+        if(type === 'text') {
+            togglePwdBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4 text-gray-800 dark:text-gray-200"><path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" /></svg>';
+        } else {
+            togglePwdBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>';
+        }
+    });
+
+    const setSuccessUI = (key) => {
+        finalAccessKey = key;
+        localStorage.setItem('agent_access_key', key);
+        accessInputWrapper.classList.add('hidden');
+        saveKeyBtn.classList.add('hidden');
+        verifiedBadge.classList.replace('hidden', 'flex');
+    };
+
+    const setEditingUI = () => {
+        accessInputWrapper.classList.remove('hidden');
+        saveKeyBtn.classList.remove('hidden');
+        verifiedBadge.classList.replace('flex', 'hidden');
+        accessCodeInput.value = finalAccessKey;
+        accessCodeInput.focus();
+    };
+
     // Access Key Persistence
     let finalAccessKey = localStorage.getItem('agent_access_key') || '';
     if (finalAccessKey) {
-        accessCodeInput.value = finalAccessKey;
-        accessCodeInput.disabled = true;
-        saveKeyBtn.innerHTML = '已保存 <span class="pl-1 opacity-80 cursor-pointer">🔒</span>';
-        saveKeyBtn.classList.add('bg-black', 'text-white');
+        setSuccessUI(finalAccessKey);
     }
 
-    saveKeyBtn.addEventListener('click', () => {
+    verifiedBadge.addEventListener('click', setEditingUI);
+
+    const validateAccessCode = async () => {
         const val = accessCodeInput.value.trim();
-        if (accessCodeInput.disabled) {
-            // Unlock mode
+        if (!val) return;
+
+        const prevText = saveKeyBtn.innerHTML;
+        saveKeyBtn.innerHTML = '<svg class="animate-spin -ml-1 mr-2 w-4 h-4 text-white inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>保存';
+        saveKeyBtn.disabled = true;
+        saveKeyBtn.classList.add('opacity-80', 'cursor-wait');
+        accessCodeInput.disabled = true;
+        
+        try {
+            const response = await fetch(API_URL.replace('/chat', '/validate'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ access_code: val })
+            });
+            
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.detail || '验证失败');
+            }
+            
+            // Save mode
+            setSuccessUI(val);
+        } catch(error) {
+            saveKeyBtn.innerHTML = prevText;
+            alert(error.message);
+            accessCodeInput.value = '';
             accessCodeInput.disabled = false;
             accessCodeInput.focus();
-            saveKeyBtn.innerHTML = '保存 <span class="pl-1">✅</span>';
-        } else if (val) {
-            // Save mode
-            finalAccessKey = val;
-            localStorage.setItem('agent_access_key', val);
-            accessCodeInput.disabled = true;
-            saveKeyBtn.innerHTML = '已保存 <span class="pl-1 opacity-80 cursor-pointer">🔒</span>';
-        } else {
-            alert("请先输入有效的邀请码");
+        } finally {
+            saveKeyBtn.classList.remove('opacity-80', 'cursor-wait');
+            saveKeyBtn.disabled = false;
+            accessCodeInput.disabled = false;
         }
+    };
+
+    saveKeyBtn.addEventListener('click', validateAccessCode);
+    
+    // Auto validate on Enter or Blur
+    accessCodeInput.addEventListener('keypress', (e) => {
+        if(e.key === 'Enter') validateAccessCode();
+    });
+    
+    // Prevent togglePwdBtn from stealing focus on click
+    togglePwdBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+    });
+
+    accessCodeInput.addEventListener('blur', () => {
+        // Delay blur to allow save-key-btn click without immediately alerting block
+        setTimeout(() => {
+            if(document.activeElement !== saveKeyBtn && document.activeElement !== togglePwdBtn && accessCodeInput.value.trim() && !verifiedBadge.classList.contains('flex')) {
+                validateAccessCode();
+            }
+        }, 100);
     });
 
     // Handle quick pills (Persistent)
@@ -68,18 +172,40 @@ document.addEventListener('DOMContentLoaded', () => {
         return escapeHTML(text).replace(/\n/g, '<br/>');
     };
 
+    window.copyToClipboard = (text, button) => {
+        navigator.clipboard.writeText(text).then(() => {
+            const old = button.innerHTML;
+            button.innerHTML = '✅ 已复制！';
+            setTimeout(() => button.innerHTML = old, 1500);
+        });
+    };
+
+    window.editMessage = (text) => {
+        userInput.value = text;
+        userInput.focus();
+    };
+
     // Helper: Create User Message Element
     const appendUserMessage = (text) => {
         const msgDiv = document.createElement('div');
-        msgDiv.className = 'flex w-full mt-4 space-x-4 max-w-2xl ml-auto justify-end';
-        msgDiv.innerHTML = `
-            <div class="bg-gray-100 text-gray-900 border border-gray-200/60 p-4 rounded-2xl rounded-tr-sm shadow-sm text-[15px] break-words whitespace-pre-wrap leading-relaxed">
-                ${escapeHTML(text)}
-            </div>
-            <div class="flex-shrink-0 mt-1 h-9 w-9 rounded-full bg-gray-200 flex items-center justify-center shadow-sm">
-                <span class="text-gray-600 font-medium text-sm">U</span>
-            </div>
-        `;
+        msgDiv.className = 'flex w-full mt-4 space-x-4 max-w-2xl ml-auto justify-end group transition-colors duration-300';
+        const escapedText = escapeHTML(text);
+        const safeJsText = escapedText.replace(/'/g, "\\'").replace(/\n/g, "\\n");
+        msgDiv.innerHTML = '<div class="flex flex-col items-end w-full">' +
+            '<div class="flex space-x-2 mb-1 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 dark:text-gray-500 text-xs">' +
+                '<button class="hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-1.5 py-0.5 rounded cursor-pointer transition-colors" onclick="window.copyToClipboard(\'' + safeJsText + '\', this)">📋 复制</button>' +
+                '<button class="hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-1.5 py-0.5 rounded cursor-pointer transition-colors" onclick="window.editMessage(\'' + safeJsText + '\')">✏️ 编辑</button>' +
+            '</div>' +
+            '<div class="bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 border border-gray-200/60 dark:border-gray-600 p-4 rounded-2xl rounded-tr-sm shadow-sm text-[15px] break-words whitespace-pre-wrap leading-relaxed inline-block max-w-full transition-colors duration-300">' + escapedText + '</div>' +
+            '</div>' +
+            '<div class="flex-shrink-0 mt-6 h-9 w-9 rounded-full bg-gradient-to-tr from-emerald-100 to-teal-50 dark:from-emerald-900/40 dark:to-teal-900/30 flex items-center justify-center shadow-sm transition-colors duration-300 ring-1 ring-emerald-200/60 dark:ring-teal-700/40">' +
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5 text-emerald-600 dark:text-teal-400">' +
+                  '<circle cx="12" cy="12" r="10"></circle>' +
+                  '<path d="M8 14s1.5 2 4 2 4-2 4-2"></path>' +
+                  '<line x1="9" y1="9" x2="9.01" y2="9"></line>' +
+                  '<line x1="15" y1="9" x2="15.01" y2="9"></line>' +
+                '</svg>' +
+            '</div>';
         chatBox.appendChild(msgDiv);
         scrollToBottom();
     };
@@ -87,38 +213,39 @@ document.addEventListener('DOMContentLoaded', () => {
     // Helper: Create Bot Message Element
     const appendBotMessage = (text, latency = null, cacheHit = false, intercepted = false) => {
         const msgDiv = document.createElement('div');
-        msgDiv.className = 'flex w-full mt-4 space-x-4 max-w-2xl';
+        msgDiv.className = 'flex w-full mt-4 space-x-4 max-w-2xl group transition-colors duration-300';
 
         let badgeHtml = '';
         if (latency) {
             let badgeStyle = '';
             if (cacheHit) {
-                badgeStyle = '<span class="px-2.5 py-1 bg-green-50 text-green-700 border border-green-200 rounded-full font-medium tracking-wide">⚡ Cache Hit</span>';
+                badgeStyle = '<span class="px-2.5 py-1 bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-500/20 rounded-full font-medium tracking-wide transition-colors">⚡ Cache Hit</span>';
             } else if (intercepted) {
-                badgeStyle = '<span class="px-2.5 py-1 bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-full font-medium tracking-wide shadow-sm">🛡️ Zero-Layer Intercept</span>';
+                badgeStyle = '<span class="px-2.5 py-1 bg-yellow-50 dark:bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border border-yellow-200 dark:border-yellow-500/20 rounded-full font-medium tracking-wide shadow-sm transition-colors">🛡️ Zero-Layer Intercept</span>';
             } else {
-                badgeStyle = '<span class="px-2.5 py-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-full font-medium tracking-wide">🧠 LLM Analysis</span>';
+                badgeStyle = '<span class="px-2.5 py-1 bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-500/20 rounded-full font-medium tracking-wide transition-colors">🧠 LLM Analysis</span>';
             }
 
-            badgeHtml = `
-                <div class="mt-2 flex items-center space-x-2 text-[11px] uppercase">
-                    ${badgeStyle}
-                    <span class="text-gray-400 font-medium tracking-wider">⏱ ${latency}ms</span>
-                </div>
-            `;
+            badgeHtml = '<div class="mt-2 flex items-center space-x-2 text-[11px] uppercase">' +
+                    badgeStyle +
+                    '<span class="text-gray-400 dark:text-gray-500 font-medium tracking-wider">⏱ ' + latency + 'ms</span>' +
+                '</div>';
         }
 
-        msgDiv.innerHTML = `
-            <div class="flex-shrink-0 mt-1 h-9 w-9 rounded-full bg-gradient-to-tr from-gray-700 to-gray-900 flex items-center justify-center shadow-md">
-                <span class="text-white font-medium text-sm">A</span>
-            </div>
-            <div class="flex flex-col flex-1 mr-8">
-                <div class="bg-white p-4 rounded-2xl rounded-tl-sm shadow-sm border ${intercepted ? 'border-yellow-200/60' : 'border-gray-100'} text-gray-800 text-[15px] whitespace-pre-wrap leading-relaxed model-response font-medium">
-                    ${formatText(text)}
-                </div>
-                ${badgeHtml}
-            </div>
-        `;
+        const safeJsText = escapeHTML(text).replace(/'/g, "\\'").replace(/\n/g, "\\n");
+        msgDiv.innerHTML = '<div class="flex-shrink-0 mt-6 h-9 w-9 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center shadow-md">' +
+                '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 text-white"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09l2.846.813-2.846.813a4.5 4.5 0 00-3.09 3.09z" /></svg>' +
+            '</div>' +
+            '<div class="flex flex-col flex-1 mr-8">' +
+                '<div class="flex space-x-2 mb-1 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 dark:text-gray-500 text-xs">' +
+                    '<button class="hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-1.5 py-0.5 rounded cursor-pointer transition-colors" onclick="window.copyToClipboard(\'' + safeJsText + '\', this)">📋 复制</button>' +
+                '</div>' +
+                '<div class="bg-white dark:bg-gray-800 p-4 rounded-2xl rounded-tl-sm shadow-sm border ' + (intercepted ? 'border-yellow-200/60 dark:border-yellow-500/30' : 'border-gray-100 dark:border-gray-700') + ' text-gray-800 dark:text-gray-200 text-[15px] whitespace-pre-wrap leading-relaxed model-response font-medium transition-colors duration-300">' +
+                    formatText(text) +
+                '</div>' +
+                badgeHtml +
+            '</div>';
+        
         chatBox.appendChild(msgDiv);
         scrollToBottom();
     };
@@ -126,15 +253,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Helper: Create Error Message Element with Retry
     const appendErrorMessage = (message, failedQuery) => {
         const msgDiv = document.createElement('div');
-        msgDiv.className = 'flex w-full mt-4 space-x-4 max-w-2xl';
+        msgDiv.className = 'flex w-full mt-4 space-x-4 max-w-2xl transition-colors duration-300';
         msgDiv.innerHTML = `
-            <div class="flex-shrink-0 mt-1 h-9 w-9 rounded-full bg-red-50 border border-red-100 flex items-center justify-center shadow-sm">
+            <div class="flex-shrink-0 mt-1 h-9 w-9 rounded-full bg-red-50 dark:bg-red-500/10 border border-red-100 dark:border-red-500/20 flex items-center justify-center shadow-sm">
                 <span class="text-red-500 font-bold text-sm">!</span>
             </div>
             <div class="flex flex-col flex-1 mr-8">
-                <div class="bg-red-50 p-4 rounded-2xl rounded-tl-sm border border-red-100/60 text-red-800 text-[15px] leading-relaxed shadow-sm">
+                <div class="bg-red-50 dark:bg-red-900/20 p-4 rounded-2xl rounded-tl-sm border border-red-100/60 dark:border-red-800/30 text-red-800 dark:text-red-200 text-[15px] leading-relaxed shadow-sm transition-colors duration-300">
                     <p class="font-medium mb-2">${escapeHTML(message)}</p>
-                    <button onclick="window.retryLastRequest()" class="inline-flex items-center space-x-1 text-sm bg-white hover:bg-gray-50 border border-red-200 text-red-600 px-3 py-1.5 rounded-lg transition-colors shadow-sm focus:outline-none">
+                    <button onclick="window.retryLastRequest()" class="inline-flex items-center space-x-1 text-sm bg-white dark:bg-red-950/40 hover:bg-gray-50 dark:hover:bg-red-900/60 border border-red-200 dark:border-red-800/50 text-red-600 dark:text-red-400 px-3 py-1.5 rounded-lg transition-colors shadow-sm focus:outline-none">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
                         <span>重试 (Retry)</span>
                     </button>
@@ -149,17 +276,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const createLoadingIndicator = () => {
         const id = 'loader-' + Date.now();
         const msgDiv = document.createElement('div');
-        msgDiv.className = 'flex w-full mt-4 space-x-4 max-w-2xl';
+        msgDiv.className = 'flex w-full mt-4 space-x-4 max-w-2xl transition-colors duration-300';
         msgDiv.id = id;
         msgDiv.innerHTML = `
-            <div class="flex-shrink-0 mt-1 h-9 w-9 rounded-full bg-gradient-to-tr from-gray-700 to-gray-900 flex items-center justify-center shadow-md">
-                <span class="text-white font-medium text-sm">A</span>
+            <div class="flex-shrink-0 mt-1 h-9 w-9 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center shadow-md">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 text-white">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09l2.846.813-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                </svg>
             </div>
             <div class="flex flex-col flex-1 mr-8">
-                <div class="bg-white p-4 py-5 rounded-2xl rounded-tl-sm shadow-sm border border-gray-100 flex space-x-1.5 items-center">
-                    <div class="w-2 h-2 bg-gray-400 rounded-full animate-pulse"></div>
-                    <div class="w-2 h-2 bg-gray-400 rounded-full animate-pulse delay-75"></div>
-                    <div class="w-2 h-2 bg-gray-400 rounded-full animate-pulse delay-150"></div>
+                <div class="bg-white dark:bg-gray-800 p-4 py-5 rounded-2xl rounded-tl-sm shadow-sm border border-gray-100 dark:border-gray-700 flex space-x-1.5 items-center transition-colors duration-300">
+                    <div class="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-pulse"></div>
+                    <div class="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-pulse delay-75"></div>
+                    <div class="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-pulse delay-150"></div>
                 </div>
             </div>
         `;

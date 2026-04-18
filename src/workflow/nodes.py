@@ -344,8 +344,8 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
     
     llm_calls = state.get("llm_calls", {}).copy()
     
-    # 拼接最终呈现给用户的文案格式
-    final_response = f"针对您的问题：“{state['query']}”\n\n解答如下：\n{state['answer']}"
+    # 获取最核心的答案呈现给用户
+    final_response = state['answer']
     
     # --- 【自学习逻辑】：将高质量研究结果回填至语义缓存 ---
     # 只有当原本未命中缓存（且非前置拦截），且当前研究结果质量达标时，才执行存入 Redis 操作

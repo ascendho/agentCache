@@ -4,27 +4,83 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Customer Support Agent</title>
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234F46E5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/%3E%3C/svg%3E">
     <!-- Google Fonts & Tailwind -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    animation: {
+                        'blob': "blob 7s infinite",
+                    },
+                    keyframes: {
+                        blob: {
+                            "0%": { transform: "translate(0px, 0px) scale(1)" },
+                            "33%": { transform: "translate(30px, -50px) scale(1.1)" },
+                            "66%": { transform: "translate(-20px, 20px) scale(0.9)" },
+                            "100%": { transform: "translate(0px, 0px) scale(1)" }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .animation-delay-2000 { animation-delay: 2s; }
+        .animation-delay-4000 { animation-delay: 4s; }
+    </style>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
-<body class="bg-[#f8f9fa] font-sans h-screen flex flex-col antialiased text-gray-800">
-    <!-- Header -->
-    <header class="bg-white/80 backdrop-blur-md shadow-sm border-b border-gray-100 z-10 relative">
+<body class="bg-gray-50 dark:bg-gray-900 font-sans h-screen flex items-center justify-center antialiased text-gray-800 dark:text-gray-200 p-2 sm:p-6 overflow-hidden relative transition-colors duration-300">
+    <!-- Animated Background Blobs -->
+    <div class="absolute top-0 -left-4 w-72 h-72 bg-purple-400 rounded-full filter blur-[100px] opacity-50 animate-blob dark:bg-purple-600 dark:opacity-30 pointer-events-none"></div>
+    <div class="absolute top-0 -right-4 w-72 h-72 bg-yellow-300 rounded-full filter blur-[100px] opacity-50 animate-blob animation-delay-2000 dark:bg-yellow-600 dark:opacity-30 pointer-events-none"></div>
+    <div class="absolute -bottom-8 left-20 w-72 h-72 bg-pink-400 rounded-full filter blur-[100px] opacity-50 animate-blob animation-delay-4000 dark:bg-pink-600 dark:opacity-30 pointer-events-none"></div>
+
+    <!-- Card Container -->
+    <div class="w-full max-w-4xl h-full max-h-[850px] bg-[#f8f9fa] dark:bg-gray-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col relative border border-gray-200/50 dark:border-gray-700 backdrop-blur-sm transition-colors duration-300 z-10">
+        <!-- Header -->
+        <header class="bg-white/80 dark:bg-gray-800/80 backdrop-blur-md shadow-sm border-b border-gray-100 dark:border-gray-700 z-20 relative shrink-0 transition-colors duration-300">
         <div class="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-            <h1 class="text-xl font-semibold tracking-tight text-gray-900">电商客服支持智能体</h1>
+            <h1 class="text-xl font-semibold tracking-tight text-gray-900 dark:text-white">电商平台用户支持智能客服</h1>
             <div class="flex items-center space-x-3">
-                <span class="text-xs font-medium text-gray-400 uppercase tracking-wider">Access</span>
-                <input 
-                    type="password" 
-                    id="access-code" 
-                    placeholder="Enter code" 
-                    class="border border-gray-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-black/5 w-32 transition-all disabled:bg-gray-50 disabled:text-gray-400 shadow-sm"
-                />
-                <button id="save-key-btn" class="bg-gray-900 hover:bg-black text-white rounded-lg px-3 py-1.5 text-sm font-medium transition-all shadow-sm focus:ring-2 focus:ring-gray-300 focus:outline-none flex items-center cursor-pointer">
-                    保存 ✅
+                
+                <!-- Access Code Controls Container -->
+                <div id="access-container" class="flex items-center space-x-2">
+                    <div id="access-input-wrapper" class="flex items-center space-x-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-600 rounded-lg pr-1 pl-3 py-1.5 shadow-sm transition-colors focus-within:ring-2 focus-within:ring-black/5 dark:focus-within:ring-white/10">
+                        <span class="text-xs font-medium text-gray-400 uppercase tracking-wider select-none">Access</span>
+                        <input 
+                            type="password" 
+                            id="access-code" 
+                            placeholder="Enter code" 
+                            class="bg-transparent border-none outline-none w-28 text-sm text-gray-800 dark:text-gray-200"
+                        />
+                        <button id="toggle-pwd-btn" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1 rounded-md focus:outline-none transition-colors" title="显示密码">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        </button>
+                    </div>
+                    <button id="save-key-btn" class="bg-gray-900 dark:bg-gray-700 hover:bg-black dark:hover:bg-gray-600 text-white rounded-lg px-3 py-1.5 text-sm font-medium transition-all shadow-sm focus:ring-2 focus:ring-gray-300 dark:focus:ring-gray-600 focus:outline-none flex items-center cursor-pointer whitespace-nowrap">
+                        保存 <span class="pl-1">✅</span>
+                    </button>
+                </div>
+                
+                <!-- Verified Badge (Hidden initially) -->
+                <div id="verified-badge" class="hidden items-center justify-center bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400 rounded-lg px-3 py-1.5 text-sm font-medium border border-green-200 dark:border-green-500/20 cursor-pointer shadow-sm transition-all hover:bg-green-100 dark:hover:bg-green-500/20" title="点击修改验证码">
+                    ✅ <span class="ml-1">已授权</span>
+                </div>
+
+                <!-- Theme Toggle Button -->
+                <button id="theme-toggle-btn" class="ml-2 w-10 h-10 flex items-center justify-center text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white bg-gray-100 dark:bg-gray-700 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors focus:outline-none shadow-sm border border-gray-200 dark:border-gray-600">
+                    <!-- Sun Icon (hidden in base/light mode) -->
+                    <svg id="theme-toggle-light-icon" class="hidden w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4.22 2.32a1 1 0 011.415 0l.707.708a1 1 0 01-1.414 1.414l-.708-.707a1 1 0 010-1.415zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zm-4.78 6.46a1 1 0 010 1.415l-.707.707a1 1 0 01-1.414-1.414l.707-.708a1 1 0 011.414 0zM10 18a1 1 0 01-1-1v-1a1 1 0 112 0v1a1 1 0 01-1 1zm-6.46-4.78a1 1 0 01-1.415 0l-.707-.707a1 1 0 011.414-1.414l.708.707a1 1 0 010 1.415zM3 10a1 1 0 011-1h1a1 1 0 110 2H4a1 1 0 01-1-1zm2.32-4.22a1 1 0 010-1.415l.707-.708a1 1 0 011.414 1.414l-.708.707a1 1 0 01-1.415 0zM10 14a4 4 0 100-8 4 4 0 000 8z" clip-rule="evenodd"></path></svg>
+                    <!-- Moon Icon (hidden in dark mode) -->
+                    <svg id="theme-toggle-dark-icon" class="hidden w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"></path></svg>
                 </button>
+
             </div>
         </div>
     </header>
@@ -34,48 +90,50 @@
         <div id="chat-box" class="flex-1 overflow-y-auto px-6 pb-6 space-y-6">
             <!-- Initial Bot Message -->
             <div class="flex w-full mt-2 space-x-4 max-w-2xl">
-                <div class="flex-shrink-0 mt-1 h-9 w-9 rounded-full bg-gradient-to-tr from-gray-700 to-gray-900 flex items-center justify-center shadow-md">
-                    <span class="text-white font-medium text-sm">A</span>
+                <div class="flex-shrink-0 mt-1 h-9 w-9 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center shadow-md">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 text-white">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09l2.846.813-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                    </svg>
                 </div>
                 <div class="flex flex-col">
-                    <div class="bg-white p-4 rounded-2xl rounded-tl-sm shadow-sm border border-gray-100 text-gray-700 text-[15px] leading-relaxed">
-                        您好！我是本平台的电商客服支持智能体，基于 RedisVL 的高速缓存防刷。仅回答平台相关问题。<br/><br/><span class="text-gray-400 text-sm">请在顶部输入邀请码并保存后向我提问体验。</span>
+                    <div class="bg-white dark:bg-gray-800 p-4 rounded-2xl rounded-tl-sm shadow-sm border border-gray-100 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-[15px] leading-relaxed transition-colors duration-300">
+                        您好！我是本电商平台的用户支持智能客服，很高兴为您提供帮助。无论您在购物过程中遇到任何问题，还是有关于订单、支付、退换货等方面的疑问，我都能为您提供及时、准确的解答。请您告诉我您的需求，我将竭尽全力为您提供最满意的服务。感谢您的支持与信任，祝您购物愉快！<br/><br/><span class="text-gray-400 dark:text-gray-500 text-sm">请在顶部输入邀请码并保存后向我提问体验。</span>
                     </div>
                 </div>
             </div>
         </div>
 
         <!-- Input Area Fixed Bottom -->
-        <div class="absolute bottom-0 w-full bg-gradient-to-t from-[#f8f9fa] via-[#f8f9fa] to-transparent pt-8 pb-6 px-4">
+        <div class="absolute bottom-0 w-full bg-gradient-to-t from-[#f8f9fa] via-[#f8f9fa] to-transparent dark:from-gray-800 dark:via-gray-800 dark:to-transparent pt-8 pb-6 px-4 transition-colors duration-300">
             <div class="max-w-4xl mx-auto flex flex-col items-center">
                 <!-- Persistent Quick Action Pills -->
                 <div class="flex w-full space-x-2 flex-wrap gap-y-2 mb-4 justify-center" id="quick-actions">
-                    <button class="quick-pill bg-white/80 backdrop-blur border border-gray-200 text-gray-600 hover:border-gray-900 hover:text-gray-900 text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
+                    <button class="quick-pill bg-white/80 dark:bg-gray-800/80 backdrop-blur border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-900 dark:hover:border-gray-500 hover:text-gray-900 dark:hover:text-white text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
                         你们支持几天无理由退换？
                     </button>
-                    <button class="quick-pill bg-white/80 backdrop-blur border border-gray-200 text-gray-600 hover:border-gray-900 hover:text-gray-900 text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
+                    <button class="quick-pill bg-white/80 dark:bg-gray-800/80 backdrop-blur border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-900 dark:hover:border-gray-500 hover:text-gray-900 dark:hover:text-white text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
                         退货运费谁出？
                     </button>
-                    <button class="quick-pill bg-white/80 backdrop-blur border border-gray-200 text-gray-600 hover:border-gray-900 hover:text-gray-900 text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
+                    <button class="quick-pill bg-white/80 dark:bg-gray-800/80 backdrop-blur border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-900 dark:hover:border-gray-500 hover:text-gray-900 dark:hover:text-white text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
                         填错地址了能改吗？
                     </button>
-                    <button class="quick-pill bg-white/80 backdrop-blur border border-gray-200 text-gray-600 hover:border-gray-900 hover:text-gray-900 text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
+                    <button class="quick-pill bg-white/80 dark:bg-gray-800/80 backdrop-blur border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-900 dark:hover:border-gray-500 hover:text-gray-900 dark:hover:text-white text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
                         怎么联系人工？
                     </button>
-                    <button class="quick-pill bg-white/80 backdrop-blur border border-gray-200 text-gray-600 hover:border-gray-900 hover:text-gray-900 text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
+                    <button class="quick-pill bg-white/80 dark:bg-gray-800/80 backdrop-blur border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-gray-900 dark:hover:border-gray-500 hover:text-gray-900 dark:hover:text-white text-[13px] px-4 py-2 rounded-full transition-all shadow-sm focus:outline-none font-medium">
                         支持海外发货吗？
                     </button>
                 </div>
                 
-                <div class="w-full bg-white shadow-lg rounded-2xl border border-gray-200/60 flex items-center px-5 py-3 relative overflow-hidden transition-shadow focus-within:shadow-xl focus-within:border-gray-300">
+                <div class="w-full bg-white dark:bg-gray-900 shadow-lg rounded-2xl border border-gray-200/60 dark:border-gray-700 flex items-center px-5 py-3 relative overflow-hidden transition-all duration-300 focus-within:shadow-xl focus-within:border-gray-300 dark:focus-within:border-gray-600">
                     <input 
                         type="text" 
                         id="user-input" 
                         placeholder="Ask me anything..." 
-                        class="flex-1 bg-transparent border-none outline-none text-gray-900 placeholder-gray-400 py-1 text-[15px]"
+                        class="flex-1 bg-transparent border-none outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 py-1 text-[15px]"
                         autocomplete="off"
                     />
-                    <button id="send-btn" class="ml-3 bg-gray-900 hover:bg-black text-white rounded-xl p-2.5 h-10 w-10 flex items-center justify-center transition-all shadow-sm active:scale-95">
+                    <button id="send-btn" class="ml-3 bg-gray-900 dark:bg-gray-700 hover:bg-black dark:hover:bg-gray-600 text-white rounded-xl p-2.5 h-10 w-10 flex items-center justify-center transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-4 h-4 translate-x-0.5">
                           <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75" />
                         </svg>
@@ -84,6 +142,7 @@
             </div>
         </div>
     </main>
+    </div>
 
     <script src="app.js"></script>
 </body>

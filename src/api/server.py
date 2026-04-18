@@ -61,6 +61,9 @@ class ChatResponse(BaseModel):
     cache_hit: bool
     intercepted: bool
 
+class ValidateRequest(BaseModel):
+    access_code: str
+
 # Simple IP rate restrictor helper
 def check_rate_limit(ip: str):
     if not redis_client:
@@ -72,6 +75,15 @@ def check_rate_limit(ip: str):
         raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
     redis_client.incr(key)
     redis_client.expire(key, 60)
+
+@app.post("/validate")
+async def validate_code(request: ValidateRequest):
+    if request.access_code != ACCESS_CODE:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Access Code"
+        )
+    return {"status": "ok", "message": "Access code is valid"}
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest, client_ip: str = "127.0.0.1"):
