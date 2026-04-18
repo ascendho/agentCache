@@ -261,7 +261,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="flex flex-col flex-1 mr-8">
                 <div class="bg-red-50 dark:bg-red-900/20 p-4 rounded-2xl rounded-tl-sm border border-red-100/60 dark:border-red-800/30 text-red-800 dark:text-red-200 text-[15px] leading-relaxed shadow-sm transition-colors duration-300">
                     <p class="font-medium mb-2">${escapeHTML(message)}</p>
-                    <button onclick="window.retryLastRequest()" class="inline-flex items-center space-x-1 text-sm bg-white dark:bg-red-950/40 hover:bg-gray-50 dark:hover:bg-red-900/60 border border-red-200 dark:border-red-800/50 text-red-600 dark:text-red-400 px-3 py-1.5 rounded-lg transition-colors shadow-sm focus:outline-none">
+                    <button onclick="window.retryLastRequest(this)" class="inline-flex items-center space-x-1 text-sm bg-white dark:bg-red-950/40 hover:bg-gray-50 dark:hover:bg-red-900/60 border border-red-200 dark:border-red-800/50 text-red-600 dark:text-red-400 px-3 py-1.5 rounded-lg transition-colors shadow-sm focus:outline-none">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
                         <span>重试 (Retry)</span>
                     </button>
@@ -313,8 +313,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Retry global binding
     window.lastAttemptedQuery = "";
-    window.retryLastRequest = () => {
+    window.retryLastRequest = (btnElement) => {
         if(window.lastAttemptedQuery) {
+            if (btnElement) {
+                const errorBox = btnElement.closest('.flex.w-full.mt-4');
+                if (errorBox) errorBox.remove();
+            }
             handleSend(window.lastAttemptedQuery, true);
         }
     };

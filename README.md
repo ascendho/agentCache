@@ -1,50 +1,68 @@
-# Intelligent Customer Support Agent
+# 智能客服 AI Agent
 
-An enterprise-grade, highly efficient AI Agent built with LangGraph and FastAPI, featuring multi-domain architecture and semantic caching via RedisVL. 
+一个基于 LangGraph 和 FastAPI 构建的企业级、高效率 AI 智能体，支持多领域架构，并通过 RedisVL 实现语义缓存。
 
-This project demonstrates a production-ready approach to building LLM applications where frontend presentation and intelligent backend orchestration are seamlessly integrated.
+本项目展示了构建生产级大模型（LLM）应用的完整方案，将前端展示与智能后端编排进行了无缝整合。
 
-## 🌟 Core Features
-- **Semantic Caching:** Uses RedisVL and specialized embedding models (`ep-m-2026...`) to cache and rapidly return answers to semantically similar questions, drastically cutting down token costs.
-- **Workflow Orchestration:** Powered by LangGraph, capable of complex reasoning, iterative reflection, and multi-step research iterations before replying to the user.
-- **Full-Stack Integration:** FastAPI effectively serves both the complex backend AI logics and the modern, glassmorphic UI frontend, eliminating cross-origin (CORS) hassle and reducing deployment complexity.
-- **Premium User Experience:** Advanced UI with dark/light mode parsing, real-time glowing "Thinking" states, and beautifully crafted macro components.
+## 🌟 核心特性
+- **语义缓存 (Semantic Caching):** 利用 RedisVL 和专用的嵌入模型 (`ep-m-2026...`) 对语义相似的问题进行缓存和快速返回，大幅降低 Token 消耗和响应延迟。
+- **工作流编排 (Workflow Orchestration):** 基于 LangGraph 驱动，Agent 在回复用户前能够进行复杂的推理、迭代反思以及多步检索研究。
+- **全栈集成 (Full-Stack Integration):** FastAPI 一体化地提供复杂的后端 AI 逻辑服务和现代化的毛玻璃风格前端页面。无需处理跨域（CORS）烦恼，大大降低部署复杂度。
+- **高品质用户体验:** 进阶版 UI 支持暗黑/明亮模式智能切换，拥有实时的发光 "Thinking" 思考状态提示，以及精美的组件。
 
-## 📂 Architecture & Directory Structure
-Unlike standard toy examples, this repository embraces Domain-Driven Design (DDD). We do not simply divide code into `frontend` and `backend`. **The `src/` directory is the backend brain of the application.**
+## 📂 架构与目录结构
+有别于常规的玩具项目，本代码库拥抱领域驱动设计（DDD）。我们不是简单地将代码分为 `frontend` 和 `backend`，**`src/` 目录正是整个应用的大脑核心。**
 
 ```text
 .
-├── frontend/             # Static UI Assets (HTML, CSS, JS with Glassmorphism)
-└── src/                  # The Backend Core (Python)
-    ├── api/              # Domain: Gateway & Routing (FastAPI server, Auth, Mounts)
-    ├── workflow/         # Domain: Intelligence (LangGraph nodes, edges, states, prompts)
-    ├── cache/            # Domain: Memory & Performance (RedisVL Semantic Caching)
-    ├── knowledge/        # Domain: Libraries (Embeddings & Document Parsers)
-    ├── common/           # Domain: Infrastructure (Logging, Security, Environments)
-    └── testing/          # Domain: Evaluation (Automated scenario runners and logging)
+├── frontend/             # 前端静态资源 (HTML, CSS, JS 及毛玻璃特效 UI)
+├── data/                 # 数据集 (包含电商客服白皮书知识库等)
+├── tests/                # 测试套件 (测试代码和评测脚本)
+└── src/                  # 核心后端逻辑 (Python)
+    ├── api/              # 网关与路由 (FastAPI 服务器、路由挂载)
+    ├── workflow/         # 智能工作流 (LangGraph Node、Edge、状态和提示词)
+    ├── cache/            # 缓存与性能 (RedisVL 语义缓存集成)
+    ├── knowledge/        # 知识库层 (文档解析机制、Embedding 嵌入)
+    └── common/           # 基础设施层 (日志配置、环境变量安全)
 ```
 
-## 🚀 Quick Start / Deployment
+## 🚀 极速启动与部署指南
 
-### 1. Prerequisites
+### 1. 环境准备
 - **Python 3.11+**
-- **Redis Server** running locally or a provided remote `REDIS_URL`
-- **ARK API Key** (Volcengine/Doubao models) 
+- **Redis Server**（本地运行或在 `.env` 提供远程的 `REDIS_URL`）
+- **大模型 API Key**（如: 火山引擎/豆包模型 ARK_API_KEY，或其他接入渠道）
 
-### 2. Install Dependencies
+### 2. 安装依赖
+建议使用虚拟环境以避免依赖冲突：
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Start the Unified Server
-Because the frontend is cleanly mounted into the FastAPI application, a single command boots the entire stack:
+### 3. 配置环境变量
+复制根目录下的示例环境变量文件并填入您的真实密钥：
+```bash
+cp .env.example .env
+```
+（确保配置了对应的 LLM 接口密钥及 REDIS 访问地址）。
+
+### 4. 启动统一服务
+整个前端体系已纯净挂载入 FastAPI 应用中，您仅需一条命令即可启动完整的全栈系统！
 ```bash
 export PYTHONPATH=$(pwd)/src:$PYTHONPATH
 uvicorn src.api.server:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### 4. Open in Browser
-Visit **[http://127.0.0.1:8000](http://127.0.0.1:8000)** and start chatting with your agent!
+### 5. 开始体验
+打开浏览器访问 **[http://127.0.0.1:8000](http://127.0.0.1:8000)** 即可开始与您的智能客服智能体对话！
+
+---
+
+## 📚 知识库更新指南 (重要)
+
+如果在此后需要修改或扩展机器人的知识覆盖范围（例如修改了 `data/raw_docs.md` 平台白皮书），您需要执行以下操作来使修改生效：
+1. **清理旧版缓存**: 删除旧的向量存储/语义缓存以防拿到脏数据。
+2. **重启系统**: 重启 `uvicorn` 服务，以便 Agent 重新读取和预处理更新后的 `raw_docs.md`。
+
