@@ -167,8 +167,12 @@ document.addEventListener('DOMContentLoaded', () => {
         );
     };
 
-    // Helper: Format Server Response
+    // Helper: Format Server Response using marked.js
     const formatText = (text) => {
+        // use marked if available, fallback to simple formatting
+        if (typeof marked !== 'undefined') {
+            return marked.parse(text);
+        }
         return escapeHTML(text).replace(/\n/g, '<br/>');
     };
 
@@ -240,7 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 '<div class="flex space-x-2 mb-1 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 dark:text-gray-500 text-xs">' +
                     '<button class="hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-1.5 py-0.5 rounded cursor-pointer transition-colors" onclick="window.copyToClipboard(\'' + safeJsText + '\', this)">📋 复制</button>' +
                 '</div>' +
-                '<div class="bg-white dark:bg-gray-800 p-4 rounded-2xl rounded-tl-sm shadow-sm border ' + (intercepted ? 'border-yellow-200/60 dark:border-yellow-500/30' : 'border-gray-100 dark:border-gray-700') + ' text-gray-800 dark:text-gray-200 text-[15px] whitespace-pre-wrap leading-relaxed model-response font-medium transition-colors duration-300">' +
+                '<div class="bg-white dark:bg-gray-800 p-4 rounded-2xl rounded-tl-sm shadow-sm border ' + (intercepted ? 'border-yellow-200/60 dark:border-yellow-500/30' : 'border-gray-100 dark:border-gray-700') + ' text-gray-800 dark:text-gray-200 text-[15px] whitespace-normal leading-relaxed model-response font-medium transition-colors duration-300 markdown-content overflow-hidden">' +
                     formatText(text) +
                 '</div>' +
                 badgeHtml +
