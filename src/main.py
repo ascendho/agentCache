@@ -5,7 +5,7 @@ import warnings  # 导入告警管理模块
 from common.env import set_ark_key, to_bool_env  # 导入环境变量设置与类型转换工具
 from workflow.graph import create_agent_graph  # 导入工作流图构建函数
 from knowledge.builder import init_app_knowledge_base  # 导入知识库构建工具
-from testing.runner import run_workflow_scenarios  # 导入测试运行器
+from tests.runner import run_workflow_scenarios  # 导入测试运行器
 from cache.auto_heater import setup_cache  # 导入语义缓存预热逻辑
 from common.logger import setup_logging  # 导入日志配置工具
 
