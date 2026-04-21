@@ -74,9 +74,9 @@ def search_knowledge_base(query: str, top_k: int = 3) -> str:
         # 使用初始化时注入的模型，将字符串转换成一个高维浮点数数组（向量）
         query_vector = embeddings.embed(query)
 
-        # --- 步骤 2: 构建向量查询语句 ---
-        # VectorQuery 是 RedisVL 提供的高级 API
-        search_query = VectorQuery(
+        # --- 步骤 2: 构建混合检索语义 (Vector KNN + Text BM25) ---
+        # 1. 向量相似度查询 (语义搜索)
+        vec_query = VectorQuery(
             vector=query_vector,           # 搜索的“靶向”向量
             vector_field_name="content_vector", # Redis 中存储向量的字段名，需与 Indexer 配置一致
             return_fields=[                # 指定需要从 Redis 中检索并返回的字段
@@ -90,8 +90,56 @@ def search_knowledge_base(query: str, top_k: int = 3) -> str:
             num_results=top_k,             # 限制返回的结果条数
         )
 
-        # 执行查询：在 Redis 的 HNSW 索引空间中进行快速最近邻搜索
-        results = kb_index.query(search_query)
+        # 执行查询：在 Redis 的 HNSW 索引空间中进行快速最近邻向量搜索
+        vec_results = kb_index.query(vec_query)
+        
+        # 2. 文本词频匹配 (BM25) 查询 (字面搜索)
+        txt_results = []
+        try:
+            from redisvl.query import FilterQuery
+            from redisvl.query.filter import Text
+            
+            # 使用 Text("%") 算子进行全文词频检索（支持 RediSearch 分词截断搜索）
+            text_filter = Text("content") % query
+            txt_query = FilterQuery(
+                return_fields=[
+                    "content", 
+                    "vector_distance", 
+                    "header_1", 
+                    "header_2", 
+                    "header_3", 
+                    "is_announcement"
+                ],
+                filter_expression=text_filter,
+                num_results=top_k,
+            )
+            txt_results = kb_index.query(txt_query)
+        except Exception as e:
+            logger.warning(f"⚠️ BM25 文本检索调度异常: {e}，回退使用单一向量匹配...")
+        
+        # 3. 倒排多路召回合并 (RRF 混合搜索的简明去重合并)
+        seen_content = set()
+        merged_results = []
+        # 交叉组装 (类似于拉链合并，将兼并字面和语义的最高分数据优先置顶)
+        for i in range(max(len(vec_results), len(txt_results))):
+            # 先装载语义命中的核心内容
+            if i < len(vec_results):
+                cnt = vec_results[i].get("content")
+                if cnt not in seen_content:
+                    merged_results.append(vec_results[i])
+                    seen_content.add(cnt)
+            # 再装载纯字面精确匹配的内容 (如专有名词)
+            if i < len(txt_results):
+                cnt = txt_results[i].get("content")
+                if cnt not in seen_content:
+                    # 对于纯文本命中的项，为了规避距离没有返回，我们可以赋一个初始中等置信度的 dummy 虚拟距离
+                    if "vector_distance" not in txt_results[i]:
+                        txt_results[i]["vector_distance"] = 0.25 
+                    merged_results.append(txt_results[i])
+                    seen_content.add(cnt)
+        
+        # 截断符合目标数量
+        results = merged_results[:top_k]
 
         # --- 步骤 3: 结果后处理 ---
         # 如果搜索不到任何结果，返回友好提示给 Agent
