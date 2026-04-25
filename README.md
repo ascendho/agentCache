@@ -1,10 +1,13 @@
-# 智能客服 AI Agent
+# 电商平台用户支持智能客服
+
+![image-20260425144638472](assets/image-20260425144638472.png)
 
 一个基于 LangGraph 和 FastAPI 构建的企业级、高效率 AI 智能体，支持多领域架构，并通过 RedisVL 实现语义缓存。
 
 本项目展示了构建生产级大模型（LLM）应用的完整方案，将前端展示与智能后端编排进行了无缝整合。
 
 ## 🌟 核心特性
+
 - **语义缓存 (Semantic Caching):** 利用 RedisVL 和专用的嵌入模型 (`ep-m-2026...`) 对语义相似的问题进行缓存和快速返回，大幅降低 Token 消耗和响应延迟。
 - **工作流编排 (Workflow Orchestration):** 基于 LangGraph 驱动，Agent 在回复用户前能够进行复杂的推理、迭代反思以及多步检索研究。
 - **全栈集成 (Full-Stack Integration):** FastAPI 一体化地提供复杂的后端 AI 逻辑服务和现代化的毛玻璃风格前端页面。无需处理跨域（CORS）烦恼，大大降低部署复杂度。
