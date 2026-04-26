@@ -15,7 +15,7 @@ from redis import Redis
 
 warnings.simplefilter("ignore")
 
-app = FastAPI(title="Customer Support Agent API", version="1.0.0")
+app = FastAPI(title="E-Snap API", version="1.0.0")
 
 # Setup CORS to allow your frontend
 app.add_middleware(
@@ -128,4 +128,3 @@ async def chat_endpoint(request: ChatRequest, client_ip: str = "127.0.0.1"):
 # --- Mount Frontend Static Files ---
 # Important: This must be mounted AFTER API routes, otherwise it will intercept API calls.
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
-
