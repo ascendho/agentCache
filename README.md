@@ -33,7 +33,7 @@
 
 ### 1. 环境准备
 - **Python 3.11+**
-- **Redis Stack Server** (重要：由于本系统依赖 RedisVL 提供的向量和语义搜索能力，普通的 `redis` 无法运行。请必须安装 `redis-stack` 或带有 `search` 扩展的 Redis 服务器，例如 macOS 下使用 `brew install redis-stack` 后用 `redis-stack-server` 启动，或直接通过 Docker 运行 `redis/redis-stack:latest`)
+- **Redis Stack Server** (重要：由于本系统依赖 RedisVL 提供的向量和语义搜索能力，普通的 `redis` 无法运行。请必须安装 `redis-stack` 或带有 `search` 扩展的 Redis 服务器，例如 macOS 下使用 `brew install redis-stack` 后用 `redis-stack-server` 启动，或直接通过 Docker 运行 `redis/redis-stack:latest`。如果启动时出现 `Failed listening on port 6379` 或 `bind: Address already in use`，说明本机已经有一个 Redis/Redis Stack 实例占用了 6379，此时应复用已有实例或先停止旧实例，而不是重复启动第二个服务。)
 - **大模型 API Key**（如: 火山引擎/豆包模型 ARK_API_KEY，或其他接入渠道）
 
 ### 2. 安装依赖
@@ -41,22 +41,28 @@
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 ### 3. 配置环境变量
-复制根目录下的示例环境变量文件并填入您的真实密钥：
+如果仓库根目录已经有可用的 `.env`，请直接复用，不要覆盖它。只有首次初始化新环境时，才需要从模板复制一份：
 ```bash
 cp .env.example .env
 ```
-（确保配置了对应的 LLM 接口密钥及 REDIS 访问地址）。
+说明：应用启动时会自动读取根目录下的 `.env`，不需要手动 `source .env`。其中 `ARK_API_KEY` 必填；`REDIS_URL` 默认是 `redis://localhost:6379`，只有在 Redis 不跑本机默认端口时才需要改。
+
+`.env.example` 的作用：
+- 作为新机器/新同学首次启动时的配置模板
+- 作为可安全提交到仓库的环境变量示例
+- 如果您本地已经有正确的 `.env`，则启动项目时可以完全忽略 `.env.example`
 
 ### 4. 启动统一服务
 整个前端体系已纯净挂载入 FastAPI 应用中，您仅需一条命令即可启动完整的全栈系统！
 ```bash
 export PYTHONPATH=$(pwd)/src:$PYTHONPATH
-uvicorn src.api.server:app --host 127.0.0.1 --port 8000 --reload
+.venv/bin/python -m uvicorn src.api.server:app --host 127.0.0.1 --port 8000 --reload
 ```
+启动后请先等待终端出现 `Python executable: .../.venv/bin/python`、`Agent System Ready!` 和 `Application startup complete.`，再打开浏览器或点击快捷问题。因为 FAQ 预热、知识库构建和 Redis 初始化都发生在端口绑定之后。如果您看到的是 `/opt/homebrew/.../python`，说明当前服务并不是从项目虚拟环境启动的。
 
 ### 5. 开始体验
 打开浏览器访问 **[http://127.0.0.1:8000](http://127.0.0.1:8000)** 即可开始与您的智能客服智能体对话！

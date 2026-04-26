@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Automatically adapt to current host domain for full-stack deployment
     const API_URL = '/chat';
+    const HEALTH_URL = '/health';
 
     // Theme Management
     if (localStorage.getItem('color-theme') === 'dark') {
@@ -327,6 +328,30 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    const ensureBackendReady = async () => {
+        try {
+            const response = await fetch(HEALTH_URL, { cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error('health-check-failed');
+            }
+
+            const health = await response.json();
+            if (!health.ready) {
+                return {
+                    ok: false,
+                    message: health.message || "后端正在初始化，请等待终端出现 Application startup complete 后再试。"
+                };
+            }
+
+            return { ok: true };
+        } catch (error) {
+            return {
+                ok: false,
+                message: "网络请求失败，后端服务可能未启动或网络异常。"
+            };
+        }
+    };
+
     // Action: Handle Send
     const handleSend = async (overrideText = null, isRetry = false) => {
         const query = typeof overrideText === 'string' ? overrideText : userInput.value.trim();
@@ -340,12 +365,18 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        window.lastAttemptedQuery = query; // Save for retry even when backend is not ready yet
+
+        const readiness = await ensureBackendReady();
+        if (!readiness.ok) {
+            appendErrorMessage(readiness.message, query);
+            return;
+        }
+
         // Add user msg if not retrying
         if(!isRetry) {
              appendUserMessage(query);
         }
-        
-        window.lastAttemptedQuery = query; // Save for retry
         
         if (typeof overrideText !== 'string') {
             userInput.value = '';
@@ -373,6 +404,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     throw new Error('❌ 邀请码错误！请求被拦截，未消耗 Tokens。');
                 } else if (response.status === 429) {
                     throw new Error('⚠️ API 访问过于频繁。防刷限制已触发，请稍后再试。');
+                } else if (response.status === 503) {
+                    const errData = await response.json();
+                    throw new Error(errData.detail || '后端正在初始化，请稍后重试。');
                 }
                 const errData = await response.json();
                 throw new Error(errData.detail || 'The API request failed.');

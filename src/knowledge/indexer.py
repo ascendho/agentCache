@@ -12,8 +12,8 @@ import time     # 用于记录创建时间
 from typing import Dict, Any, List, Optional, Tuple, Union  # 静态类型提示
 
 import redis  # Redis 官方 Python 客户端
-from langchain.schema import Document  # LangChain 的标准文档对象格式
-from langchain.text_splitter import RecursiveCharacterTextSplitter  # 递归字符文本切分器
+from langchain_core.documents import Document  # LangChain 的标准文档对象格式
+from langchain_text_splitters import RecursiveCharacterTextSplitter  # 递归字符文本切分器
 from redisvl.utils.vectorize import HFTextVectorizer  # RedisVL 提供的 HuggingFace 向量化工具
 from redisvl.index import SearchIndex  # RedisVL 的搜索索引管理类
 
