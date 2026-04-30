@@ -1,7 +1,18 @@
 import csv
-import json
 import os
 from typing import Dict, List
+
+from tests.result_classifiers import (
+    execution_path,
+    is_edit_distance_bypass,
+    is_exact_bypass,
+    is_near_exact_bypass,
+    is_partial_reuse,
+    is_rerank_candidate,
+    is_reranked_full_reuse,
+    is_reranker_exception,
+)
+from tests.summary_schema import SUMMARY_FIELDNAMES, build_summary_row
 
 
 def export_results(all_results: List[Dict], total_wall_time_sec: float, output_dir: str = "outputs") -> Dict[str, str]:
@@ -12,9 +23,6 @@ def export_results(all_results: List[Dict], total_wall_time_sec: float, output_d
 
     summary_csv = os.path.join(output_dir, "run_summary.csv")
     perf_metrics_txt = os.path.join(output_dir, "performance_report.txt")
-
-    def execution_path(result: Dict) -> List[str]:
-        return result.get("execution_path", []) or []
 
     def total_llm_calls(result: Dict) -> int:
         return sum(result.get("llm_calls", {}).values())
@@ -69,152 +77,14 @@ def export_results(all_results: List[Dict], total_wall_time_sec: float, output_d
             return 0.0
         return sum_usage_value(subset, field_name) / len(subset)
 
-    def is_exact_bypass(result: Dict) -> bool:
-        return result.get("cache_hit", False) and result.get("cache_match_type") == "exact"
-
-    def is_near_exact_bypass(result: Dict) -> bool:
-        return result.get("cache_hit", False) and result.get("cache_match_type") == "near_exact"
-
-    def is_edit_distance_bypass(result: Dict) -> bool:
-        return result.get("cache_hit", False) and result.get("cache_match_type") == "edit_distance"
-
-    def is_rerank_candidate(result: Dict) -> bool:
-        return (
-            bool(result.get("cache_matched_question"))
-            and result.get("cache_match_type") not in {"exact", "near_exact", "none"}
-            and result.get("cache_rerank_attempt") not in {"skipped", "none"}
-        )
-
-    def is_reranked_full_reuse(result: Dict) -> bool:
-        return is_rerank_candidate(result) and result.get("cache_reuse_mode") == "full_reuse"
-
-    def is_partial_reuse(result: Dict) -> bool:
-        return result.get("cache_reuse_mode") == "partial_reuse" or "supplement_researched" in execution_path(result)
-
-    def is_reranker_exception(result: Dict) -> bool:
-        return str(result.get("cache_rerank_reason", "")).startswith("rerank_exception:")
-
-    def classify_path(result: Dict) -> str:
-        if result.get("intercepted", False):
-            return "拦截"
-        if is_exact_bypass(result):
-            return "精确缓存直出"
-        if is_near_exact_bypass(result):
-            return "近精确缓存直出"
-        if is_edit_distance_bypass(result):
-            return "编辑距离缓存直出"
-        if is_reranked_full_reuse(result):
-            return "Reranker完整复用"
-        if is_partial_reuse(result):
-            return "部分复用+补充研究"
-        if is_rerank_candidate(result):
-            return "Reranker拒绝后研究"
-        return "完整研究"
-
     # 1. 测试项汇总：每条主查询一行。
+    rows = [build_summary_row(idx, result) for idx, result in enumerate(all_results, 1)]
+    fieldnames = list(SUMMARY_FIELDNAMES)
     with open(summary_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "test_index",
-                "original_query",
-                "intercepted",
-                "cache_hit",
-                "cache_candidate_found",
-                "cache_match_type",
-                "cache_reuse_mode",
-                "cache_matched_question",
-                "cache_confidence",
-                "cache_rerank_passed",
-                "cache_rerank_attempt",
-                "cache_rerank_score",
-                "cache_rerank_reason",
-                "cache_reranker_reason",
-                "cache_validation_reason",
-                "cache_residual_query",
-                "cache_written_prompts",
-                "analysis_llm_calls",
-                "research_llm_calls",
-                "total_llm_calls",
-                "analysis_input_tokens",
-                "analysis_output_tokens",
-                "analysis_cached_input_tokens",
-                "research_input_tokens",
-                "research_output_tokens",
-                "research_cached_input_tokens",
-                "total_input_tokens",
-                "total_output_tokens",
-                "total_cached_input_tokens",
-                "analysis_cost_rmb",
-                "research_cost_rmb",
-                "total_cost_rmb",
-                "precheck_latency_ms",
-                "cache_latency_ms",
-                "rerank_latency_ms",
-                "research_latency_ms",
-                "supplement_latency_ms",
-                "synthesis_latency_ms",
-                "total_latency_ms",
-                "final_response",
-            ],
-        )
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-
-        for idx, result in enumerate(all_results, 1):
-            intercepted = result.get("intercepted", False)
-            cache_hit = result.get("cache_hit", False)
-            cache_candidate_found = bool(result.get("cache_matched_question"))
-            cache_confidence = result.get("cache_confidence", 0.0)
-
-            llm_calls = result.get("llm_calls", {})
-            llm_usage = result.get("llm_usage", {})
-            metrics = result.get("metrics", {})
-            total_latency = f"{metrics.get('total_latency', 0):.0f}"
-
-            writer.writerow(
-                {
-                    "test_index": idx,
-                    "original_query": result.get("query", ""),
-                    "intercepted": str(intercepted),
-                    "cache_hit": str(cache_hit),
-                    "cache_candidate_found": str(cache_candidate_found),
-                    "cache_match_type": result.get("cache_match_type", "none"),
-                    "cache_reuse_mode": result.get("cache_reuse_mode", "none"),
-                    "cache_matched_question": result.get("cache_matched_question", ""),
-                    "cache_confidence": f"{cache_confidence:.4f}",
-                    "cache_rerank_passed": str(result.get("cache_rerank_passed", False)),
-                    "cache_rerank_attempt": result.get("cache_rerank_attempt", "none"),
-                    "cache_rerank_score": f"{result.get('cache_rerank_score', 0.0):.4f}",
-                    "cache_rerank_reason": result.get("cache_rerank_reason", ""),
-                    "cache_reranker_reason": result.get("cache_reranker_reason", ""),
-                    "cache_validation_reason": result.get("cache_validation_reason", ""),
-                    "cache_residual_query": result.get("cache_residual_query", ""),
-                    "cache_written_prompts": json.dumps(result.get("cache_written_prompts", []) or [], ensure_ascii=False),
-                    "analysis_llm_calls": llm_calls.get("analysis_llm", 0),
-                    "research_llm_calls": llm_calls.get("research_llm", 0),
-                    "total_llm_calls": total_llm_calls(result),
-                    "analysis_input_tokens": int(llm_usage.get("analysis_input_tokens", 0) or 0),
-                    "analysis_output_tokens": int(llm_usage.get("analysis_output_tokens", 0) or 0),
-                    "analysis_cached_input_tokens": int(llm_usage.get("analysis_cached_input_tokens", 0) or 0),
-                    "research_input_tokens": int(llm_usage.get("research_input_tokens", 0) or 0),
-                    "research_output_tokens": int(llm_usage.get("research_output_tokens", 0) or 0),
-                    "research_cached_input_tokens": int(llm_usage.get("research_cached_input_tokens", 0) or 0),
-                    "total_input_tokens": int(llm_usage.get("total_input_tokens", 0) or 0),
-                    "total_output_tokens": int(llm_usage.get("total_output_tokens", 0) or 0),
-                    "total_cached_input_tokens": int(llm_usage.get("total_cached_input_tokens", 0) or 0),
-                    "analysis_cost_rmb": f"{float(llm_usage.get('analysis_cost_rmb', 0) or 0):.6f}",
-                    "research_cost_rmb": f"{float(llm_usage.get('research_cost_rmb', 0) or 0):.6f}",
-                    "total_cost_rmb": f"{float(llm_usage.get('total_cost_rmb', 0) or 0):.6f}",
-                    "precheck_latency_ms": f"{metrics.get('precheck_latency', 0):.0f}",
-                    "cache_latency_ms": f"{metrics.get('cache_latency', 0):.0f}",
-                    "rerank_latency_ms": f"{metrics.get('rerank_latency', 0):.0f}",
-                    "research_latency_ms": f"{metrics.get('research_latency', 0):.0f}",
-                    "supplement_latency_ms": f"{metrics.get('supplement_latency', 0):.0f}",
-                    "synthesis_latency_ms": f"{metrics.get('synthesis_latency', 0):.0f}",
-                    "total_latency_ms": total_latency,
-                    "final_response": result.get("final_response", ""),
-                }
-            )
+        for row in rows:
+            writer.writerow(row)
 
     # 2. 计算并聚合性能级指标报表
     total_queries = len(all_results)

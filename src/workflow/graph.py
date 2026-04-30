@@ -13,7 +13,12 @@ from workflow.nodes import (
     synthesize_response_node, # 节点3：整合资料并生成回答
 )
 # 导入边缘路由函数：决定流程走向的逻辑（Decision）
-from workflow.edges import cache_router, cache_rerank_router
+from workflow.edges import (
+    RouteTarget,
+    cache_rerank_router,
+    cache_router,
+    pre_check_router,
+)
 # 导入工具初始化函数：主要用于初始化向量数据库检索工具
 from workflow.tools import initialize_tools
 
@@ -40,57 +45,57 @@ def create_agent_graph(sys_cache=None, kb_index=None, embeddings=None) -> StateG
     workflow = StateGraph(WorkflowState)
 
     # 1. 添加节点 (Nodes)
-    workflow.add_node("pre_check", pre_check_node)               # 前置拦截器节点
-    workflow.add_node("check_cache", check_cache_node)           # 缓存检查节点
-    workflow.add_node("rerank_cache", rerank_cache_node)         # 缓存复用裁判节点（LLM Reranker）
-    workflow.add_node("research", research_node)                 # 知识检索/研究节点
-    workflow.add_node("research_supplement", research_supplement_node) # 部分复用后的补充研究节点
-    workflow.add_node("synthesize_response", synthesize_response_node) # 最终响应合成节点
+    workflow.add_node(RouteTarget.PRE_CHECK, pre_check_node)
+    workflow.add_node(RouteTarget.CHECK_CACHE, check_cache_node)
+    workflow.add_node(RouteTarget.RERANK_CACHE, rerank_cache_node)
+    workflow.add_node(RouteTarget.RESEARCH, research_node)
+    workflow.add_node(RouteTarget.RESEARCH_SUPPLEMENT, research_supplement_node)
+    workflow.add_node(RouteTarget.SYNTHESIZE_RESPONSE, synthesize_response_node)
 
     # 2. 设置入口点 (Entry Point)
-    workflow.set_entry_point("pre_check")
+    workflow.set_entry_point(RouteTarget.PRE_CHECK)
 
     # 2.5 配置前置检查到缓存的条件边缘
     workflow.add_conditional_edges(
-        "pre_check",
-        lambda state: "synthesize_response" if state.get("intercepted", False) else "check_cache",
+        RouteTarget.PRE_CHECK,
+        pre_check_router,
         {
-            "synthesize_response": "synthesize_response",
-            "check_cache": "check_cache"
-        }
+            RouteTarget.SYNTHESIZE_RESPONSE: RouteTarget.SYNTHESIZE_RESPONSE,
+            RouteTarget.CHECK_CACHE: RouteTarget.CHECK_CACHE,
+        },
     )
 
     # check_cache 之后：有候选则进入 Reranker，否则直接走 RAG
     workflow.add_conditional_edges(
-        "check_cache",
+        RouteTarget.CHECK_CACHE,
         cache_router,
         {
-            "synthesize_response": "synthesize_response",
-            "research_supplement": "research_supplement",
-            "rerank_cache": "rerank_cache",
-            "research": "research"
-        }
+            RouteTarget.SYNTHESIZE_RESPONSE: RouteTarget.SYNTHESIZE_RESPONSE,
+            RouteTarget.RESEARCH_SUPPLEMENT: RouteTarget.RESEARCH_SUPPLEMENT,
+            RouteTarget.RERANK_CACHE: RouteTarget.RERANK_CACHE,
+            RouteTarget.RESEARCH: RouteTarget.RESEARCH,
+        },
     )
 
     # rerank_cache 之后：通过则合成回答，未通过则走 RAG
     workflow.add_conditional_edges(
-        "rerank_cache",
+        RouteTarget.RERANK_CACHE,
         cache_rerank_router,
         {
-            "synthesize_response": "synthesize_response",
-            "research_supplement": "research_supplement",
-            "research": "research"
-        }
+            RouteTarget.SYNTHESIZE_RESPONSE: RouteTarget.SYNTHESIZE_RESPONSE,
+            RouteTarget.RESEARCH_SUPPLEMENT: RouteTarget.RESEARCH_SUPPLEMENT,
+            RouteTarget.RESEARCH: RouteTarget.RESEARCH,
+        },
     )
 
     # 4. 配置普通边缘 (Normal Edges)
     # research 运行完后，直接进入 synthesize_response 生成最终回答
-    workflow.add_edge("research", "synthesize_response")
-    workflow.add_edge("research_supplement", "synthesize_response")
+    workflow.add_edge(RouteTarget.RESEARCH, RouteTarget.SYNTHESIZE_RESPONSE)
+    workflow.add_edge(RouteTarget.RESEARCH_SUPPLEMENT, RouteTarget.SYNTHESIZE_RESPONSE)
 
     # 5. 设置终点
     # synthesize_response 运行完后，流程结束
-    workflow.add_edge("synthesize_response", END)
+    workflow.add_edge(RouteTarget.SYNTHESIZE_RESPONSE, END)
 
     # --- 日志记录与编译 ---
     logger = logging.getLogger("agentic-workflow")

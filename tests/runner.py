@@ -50,21 +50,8 @@ def display_results(result: Dict[str, Any]) -> None:
     print("=" * 60 + "\n")
 
 def classify_result_path(result: Dict[str, Any]) -> str:
-    if result.get("intercepted", False):
-        return "拦截"
-    if result.get("cache_hit", False) and result.get("cache_match_type") == "exact":
-        return "精确缓存直出"
-    if result.get("cache_hit", False) and result.get("cache_match_type") == "near_exact":
-        return "近精确缓存直出"
-    if result.get("cache_hit", False) and result.get("cache_match_type") == "edit_distance":
-        return "编辑距离缓存直出"
-    if result.get("cache_reuse_mode") == "full_reuse":
-        return "Reranker完整复用"
-    if result.get("cache_reuse_mode") == "partial_reuse":
-        return "部分复用+补充研究"
-    if result.get("cache_matched_question"):
-        return "Reranker拒绝后研究"
-    return "完整研究"
+    from tests.result_classifiers import classify_path
+    return classify_path(result)
 
 def analyze_agent_results(results: list) -> tuple:
     total_queries = len(results)

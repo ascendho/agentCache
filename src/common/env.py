@@ -66,5 +66,8 @@ def set_ark_key():
         if sys.stdin.isatty():
             os.environ["ARK_API_KEY"] = getpass.getpass("请输入你的 ARK API key: ")
         else:
-            raise ValueError("Critical Error: 线上环境缺少 'ARK_API_KEY' 或 'REDIS_URL' 环境变量配置！请在部署平台控制台添加。")
+            raise ValueError(
+                "Critical Error: 缺少 'ARK_API_KEY' 环境变量。"
+                "请在 .env 或部署平台控制台配置后重试。"
+            )
 

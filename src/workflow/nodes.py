@@ -4,8 +4,7 @@ import os       # 导入操作系统接口，用于读取环境变量
 import threading
 import time     # 导入时间模块，用于性能耗时统计
 import unicodedata
-from datetime import datetime  # 导入日期时间模块
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict  # 导入类型提示，增强代码可读性和健壮性
+from typing import Any, Dict, List, Literal, Optional, Tuple  # 导入类型提示，增强代码可读性和健壮性
 
 from langchain_core.messages import HumanMessage, SystemMessage  # 导入 LangChain 的消息对象
 from langchain_openai import ChatOpenAI           # 导入 LangChain 的 OpenAI 兼容模型接口
@@ -20,15 +19,27 @@ from workflow.prompts import (
     PARTIAL_REUSE_MERGE_PROMPT,
 )
 from common.env import (
-    ANALYSIS_CACHED_INPUT_PRICE_RMB_PER_1K,
-    ANALYSIS_INPUT_PRICE_RMB_PER_1K,
     ANALYSIS_MODEL_NAME,
-    ANALYSIS_OUTPUT_PRICE_RMB_PER_1K,
     ARK_BASE_URL,
-    RESEARCH_CACHED_INPUT_PRICE_RMB_PER_1K,
-    RESEARCH_INPUT_PRICE_RMB_PER_1K,
     RESEARCH_MODEL_NAME,
-    RESEARCH_OUTPUT_PRICE_RMB_PER_1K,
+)
+# 状态类型与状态相关 helper 集中在 workflow.state 中；本模块再导出以保持向后兼容。
+from workflow.state import (
+    CacheMatchType,
+    CacheReuseMode,
+    LLMUsage,
+    ModelFamily,
+    RerankAttempt,
+    WorkflowMetrics,
+    WorkflowState,
+    _calculate_llm_cost_rmb,
+    _extract_token_usage,
+    _record_llm_usage,
+    build_initial_state,
+    initialize_llm_usage,
+    initialize_metrics,
+    update_metrics,
+    wait_for_background_tasks,
 )
 
 # 获取名为 "agentic-workflow" 的日志记录器
@@ -38,27 +49,6 @@ logger = logging.getLogger("agentic-workflow")
 _analysis_llm = None
 _research_llm = None
 
-CacheMatchType = Literal["exact", "near_exact", "edit_distance", "subquery_exact", "subquery_near_exact", "semantic", "none"]
-CacheReuseMode = Literal["full_reuse", "partial_reuse", "reject", "none"]
-RerankAttempt = Literal["none", "skipped", "primary", "fallback", "failed"]
-ModelFamily = Literal["analysis", "research"]
-
-
-class LLMUsage(TypedDict):
-    analysis_calls: int
-    analysis_input_tokens: int
-    analysis_output_tokens: int
-    analysis_cached_input_tokens: int
-    research_calls: int
-    research_input_tokens: int
-    research_output_tokens: int
-    research_cached_input_tokens: int
-    total_input_tokens: int
-    total_output_tokens: int
-    total_cached_input_tokens: int
-    analysis_cost_rmb: float
-    research_cost_rmb: float
-    total_cost_rmb: float
 
 def get_analysis_llm():
     """获取用于缓存裁判等分析任务的 LLM 实例（低随机性，重逻辑）"""
@@ -87,224 +77,6 @@ def get_research_llm():
             base_url=ARK_BASE_URL
         )
     return _research_llm
-
-class WorkflowMetrics(TypedDict):
-    """定义工作流性能指标的字典结构"""
-    total_latency: float            # 总耗时
-    precheck_latency: float         # 前置拦截检查耗时
-    cache_latency: float            # 缓存检查耗时
-    rerank_latency: float           # 缓存复用裁判耗时
-    research_latency: float         # 知识检索耗时
-    supplement_latency: float       # 补充研究耗时
-    synthesis_latency: float        # 回答合成耗时
-    total_research_iterations: int  # 总研究循环次数
-
-class WorkflowState(TypedDict):
-    """定义整个计算图共享的状态对象结构（State）"""
-    query: str                          # 用户原始提问
-    answer: str                         # 节点间传递的中间或最终答案
-    final_response: Optional[str]       # 最终渲染给用户的文本内容
-    cache_hit: bool                     # 标记是否命中缓存
-    cache_matched_question: Optional[str] # 缓存中匹配到的原始问题
-    cache_confidence: float             # 缓存匹配的相似度分数
-    cache_seed_id: Optional[int]        # 缓存数据在数据库中的原始 ID
-    cache_match_type: CacheMatchType    # 缓存候选命中类型：exact/near_exact/subquery_exact/subquery_near_exact/semantic/none
-    cache_base_answer: str              # 缓存命中时保留的原始缓存答案
-    cache_enabled: bool                 # 是否启用缓存开关
-    intercepted: bool                   # 是否已被前置拦截器拦截
-    research_iterations: int            # 当前研究的迭代轮次
-    cache_rerank_passed: bool           # LLM Reranker 是否判定缓存答案可复用
-    cache_reuse_mode: CacheReuseMode    # full_reuse/partial_reuse/reject/none
-    cache_rerank_attempt: RerankAttempt # rerank 实际采用的判定路径
-    cache_rerank_score: float           # Reranker 给出的复用置信度
-    cache_rerank_reason: str            # 最终采用的判定/拒绝理由
-    cache_reranker_reason: str          # Reranker 原始输出理由
-    cache_validation_reason: str        # 后置校验阶段给出的拒绝理由
-    cache_reranker_residual_query: str  # Reranker 原始输出的 residual_query
-    cache_residual_query: str           # partial_reuse 时尚未覆盖的缺口查询
-    cache_writeback_entries: List[Dict[str, str]]  # 除主 query 外额外需要写入缓存的问答对
-    cache_written_prompts: List[str]    # 本轮实际写入缓存的 query / alias 列表
-    current_research_strategy: str      # 当前采取的检索策略描述
-    execution_path: List[str]           # 记录工作流经过的节点路径
-    metrics: WorkflowMetrics            # 性能监控数据
-    timestamp: str                      # 任务启动时间戳
-    llm_calls: Dict[str, int]           # 记录各个 LLM 的调用次数
-    llm_usage: LLMUsage                 # 记录真实 token 与人民币成本
-    llm_usage_lock: Any                 # 并发更新 llm_usage / llm_calls 的锁
-    background_threads: List[Any]       # 后台缓存线程，仅离线评测时 join
-
-def initialize_metrics() -> WorkflowMetrics:
-    """初始化指标字典的默认值"""
-    return {
-        "total_latency": 0.0,
-        "precheck_latency": 0.0,
-        "cache_latency": 0.0,
-        "rerank_latency": 0.0,
-        "research_latency": 0.0,
-        "supplement_latency": 0.0,
-        "synthesis_latency": 0.0,
-        "total_research_iterations": 0,
-    }
-
-
-def initialize_llm_usage() -> LLMUsage:
-    """初始化真实 token 与成本统计。"""
-    return {
-        "analysis_calls": 0,
-        "analysis_input_tokens": 0,
-        "analysis_output_tokens": 0,
-        "analysis_cached_input_tokens": 0,
-        "research_calls": 0,
-        "research_input_tokens": 0,
-        "research_output_tokens": 0,
-        "research_cached_input_tokens": 0,
-        "total_input_tokens": 0,
-        "total_output_tokens": 0,
-        "total_cached_input_tokens": 0,
-        "analysis_cost_rmb": 0.0,
-        "research_cost_rmb": 0.0,
-        "total_cost_rmb": 0.0,
-    }
-
-def build_initial_state(query: str) -> WorkflowState:
-    """构建统一的工作流初始状态，避免 API 与测试入口漂移。"""
-    return {
-        "query": query,
-        "answer": "",
-        "final_response": "",
-        "cache_hit": False,
-        "cache_matched_question": None,
-        "cache_confidence": 0.0,
-        "cache_seed_id": None,
-        "cache_match_type": "none",
-        "cache_base_answer": "",
-        "cache_enabled": True,
-        "intercepted": False,
-        "research_iterations": 0,
-        "cache_rerank_passed": False,
-        "cache_reuse_mode": "none",
-        "cache_rerank_attempt": "none",
-        "cache_rerank_score": 0.0,
-        "cache_rerank_reason": "",
-        "cache_reranker_reason": "",
-        "cache_validation_reason": "",
-        "cache_reranker_residual_query": "",
-        "cache_residual_query": "",
-        "cache_writeback_entries": [],
-        "cache_written_prompts": [],
-        "current_research_strategy": "",
-        "execution_path": ["start"],
-        "metrics": initialize_metrics(),
-        "timestamp": datetime.now().isoformat(),
-        "llm_calls": {},
-        "llm_usage": initialize_llm_usage(),
-        "llm_usage_lock": threading.Lock(),
-        "background_threads": [],
-    }
-
-def update_metrics(metrics: WorkflowMetrics, **kwargs) -> WorkflowMetrics:
-    """
-    通用指标更新函数。
-    如果 key 是数值型则累加，否则直接覆盖。
-    """
-    new_metrics = metrics.copy()  # 浅拷贝原指标，保持函数纯净
-    for key, value in kwargs.items():
-        if key in new_metrics and isinstance(new_metrics[key], (int, float)):
-            new_metrics[key] += value  # 累加耗时或计数
-        else:
-            new_metrics[key] = value   # 覆盖设置非数值属性
-    return new_metrics
-
-
-def _extract_token_usage(response: Any) -> Dict[str, int]:
-    """兼容 usage_metadata 与 response_metadata.token_usage 两种来源。"""
-    usage_metadata = getattr(response, "usage_metadata", None) or {}
-    response_metadata = getattr(response, "response_metadata", None) or {}
-    token_usage = response_metadata.get("token_usage", {}) if isinstance(response_metadata, dict) else {}
-
-    input_tokens = int(usage_metadata.get("input_tokens") or token_usage.get("prompt_tokens") or 0)
-    output_tokens = int(usage_metadata.get("output_tokens") or token_usage.get("completion_tokens") or 0)
-
-    input_details = usage_metadata.get("input_token_details", {}) if isinstance(usage_metadata, dict) else {}
-    prompt_details = token_usage.get("prompt_tokens_details", {}) if isinstance(token_usage, dict) else {}
-    cached_input_tokens = int(input_details.get("cache_read") or prompt_details.get("cached_tokens") or 0)
-
-    return {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "cached_input_tokens": cached_input_tokens,
-    }
-
-
-def _calculate_llm_cost_rmb(model_family: ModelFamily, input_tokens: int, output_tokens: int, cached_input_tokens: int) -> float:
-    billable_input_tokens = max(input_tokens - cached_input_tokens, 0)
-
-    if model_family == "analysis":
-        input_price = ANALYSIS_INPUT_PRICE_RMB_PER_1K
-        output_price = ANALYSIS_OUTPUT_PRICE_RMB_PER_1K
-        cached_input_price = ANALYSIS_CACHED_INPUT_PRICE_RMB_PER_1K
-    else:
-        input_price = RESEARCH_INPUT_PRICE_RMB_PER_1K
-        output_price = RESEARCH_OUTPUT_PRICE_RMB_PER_1K
-        cached_input_price = RESEARCH_CACHED_INPUT_PRICE_RMB_PER_1K
-
-    return (
-        billable_input_tokens / 1000.0 * input_price
-        + output_tokens / 1000.0 * output_price
-        + cached_input_tokens / 1000.0 * cached_input_price
-    )
-
-
-def _record_llm_usage(
-    llm_usage: Optional[LLMUsage],
-    model_family: ModelFamily,
-    response: Any,
-    llm_calls: Optional[Dict[str, int]] = None,
-    usage_lock: Optional[Any] = None,
-) -> None:
-    if llm_usage is None or response is None:
-        return
-
-    usage = _extract_token_usage(response)
-    input_tokens = usage["input_tokens"]
-    output_tokens = usage["output_tokens"]
-    cached_input_tokens = usage["cached_input_tokens"]
-    cost_rmb = _calculate_llm_cost_rmb(model_family, input_tokens, output_tokens, cached_input_tokens)
-
-    usage_call_key = f"{model_family}_calls"
-    usage_input_key = f"{model_family}_input_tokens"
-    usage_output_key = f"{model_family}_output_tokens"
-    usage_cached_key = f"{model_family}_cached_input_tokens"
-    usage_cost_key = f"{model_family}_cost_rmb"
-    llm_call_key = f"{model_family}_llm"
-
-    if usage_lock is not None:
-        usage_lock.acquire()
-    try:
-        llm_usage[usage_call_key] += 1
-        llm_usage[usage_input_key] += input_tokens
-        llm_usage[usage_output_key] += output_tokens
-        llm_usage[usage_cached_key] += cached_input_tokens
-        llm_usage[usage_cost_key] += cost_rmb
-        llm_usage["total_input_tokens"] += input_tokens
-        llm_usage["total_output_tokens"] += output_tokens
-        llm_usage["total_cached_input_tokens"] += cached_input_tokens
-        llm_usage["total_cost_rmb"] += cost_rmb
-        if llm_calls is not None:
-            llm_calls[llm_call_key] = llm_calls.get(llm_call_key, 0) + 1
-    finally:
-        if usage_lock is not None:
-            usage_lock.release()
-
-
-def wait_for_background_tasks(state: WorkflowState) -> WorkflowState:
-    """仅用于离线评测：等待后台线程完成，确保成本统计完整。"""
-    threads = list(state.get("background_threads", []) or [])
-    for thread in threads:
-        if thread and hasattr(thread, "join"):
-            thread.join()
-    state["background_threads"] = []
-    return state
 
 # 全局语义缓存实例占位符
 _cache_instance = None
@@ -1136,30 +908,30 @@ def research_supplement_node(state: WorkflowState) -> WorkflowState:
     }
 
 def _store_cache_entry(prompt: str, answer: str) -> None:
+    """Persist a runtime QA pair through the cache wrapper.
+
+    Delegates to `SemanticCacheWrapper.register_entry` so all writers (FAQ seed,
+    synthesize_response writeback, background subquery writeback) share one code path
+    for keeping the L1 lookup maps consistent.
+    """
     if not _cache_instance or not prompt or not answer:
         return
 
+    register = getattr(_cache_instance, "register_entry", None)
+    if callable(register):
+        register(prompt, answer)
+        return
+
+    # Defensive fallback for any custom cache shim that lacks register_entry.
     _cache_instance.cache.store(prompt=prompt, response=answer)
-
-    if not hasattr(_cache_instance, '_seed_id_by_question'):
-        _cache_instance._seed_id_by_question = {}
-    if not hasattr(_cache_instance, '_answer_by_question'):
-        _cache_instance._answer_by_question = {}
-    if not hasattr(_cache_instance, '_normalized_question_map'):
-        _cache_instance._normalized_question_map = {}
-    if not hasattr(_cache_instance, '_near_exact_question_map'):
-        _cache_instance._near_exact_question_map = {}
-
-    _cache_instance._seed_id_by_question[prompt] = None
-    _cache_instance._answer_by_question[prompt] = answer
-    if hasattr(_cache_instance, 'normalize_query'):
-        _cache_instance._normalized_question_map[_cache_instance.normalize_query(prompt)] = prompt
-    if hasattr(_cache_instance, 'normalize_surface_query'):
-        _cache_instance._near_exact_question_map[_cache_instance.normalize_surface_query(prompt)] = prompt
 
 def _cache_contains_prompt_variant(prompt: str) -> bool:
     if not _cache_instance or not prompt:
         return False
+
+    contains = getattr(_cache_instance, "contains_prompt_variant", None)
+    if callable(contains):
+        return bool(contains(prompt))
 
     if hasattr(_cache_instance, 'normalize_query'):
         normalized_prompt = _cache_instance.normalize_query(prompt)
@@ -1189,23 +961,26 @@ def _cache_segments_background(
 ) -> None:
     """后台线程：用 analysis_llm 从合并答案中提取每个子问题的精准部分并写入缓存。
     以 daemon 线程运行，不阻塞主线程/用户响应。无工具调用，成本极低。"""
-    for segment in segments:
-        try:
-            logger.info(f"   🔍 [后台] 从合并答案中提取子问题答案: '{segment[:20]}...'")
-            prompt = _SEGMENT_EXTRACT_PROMPT.format(
-                segment=segment,
-                combined_answer=_clip_rerank_answer(combined_answer, max_chars=600),
-            )
-            response = get_analysis_llm().invoke([HumanMessage(content=prompt)])
-            _record_llm_usage(llm_usage, "analysis", response, llm_calls=llm_calls, usage_lock=usage_lock)
-            segment_answer = (getattr(response, "content", "") or "").strip()
-            if not segment_answer:
-                logger.warning(f"   ⚠️ [后台] 提取结果为空，跳过: '{segment[:20]}...'")
-                continue
-            _store_cache_entry(segment, segment_answer)
-            logger.info(f"   💾 [后台] 子问题缓存写入完成: '{segment[:20]}...'")
-        except Exception as exc:
-            logger.warning(f"   ⚠️ [后台] 子问题缓存失败，跳过: '{segment[:20]}...' | error={exc}")
+    try:
+        for segment in segments:
+            try:
+                logger.info(f"   🔍 [后台] 从合并答案中提取子问题答案: '{segment[:20]}...'")
+                prompt = _SEGMENT_EXTRACT_PROMPT.format(
+                    segment=segment,
+                    combined_answer=_clip_rerank_answer(combined_answer, max_chars=600),
+                )
+                response = get_analysis_llm().invoke([HumanMessage(content=prompt)])
+                _record_llm_usage(llm_usage, "analysis", response, llm_calls=llm_calls, usage_lock=usage_lock)
+                segment_answer = (getattr(response, "content", "") or "").strip()
+                if not segment_answer:
+                    logger.warning(f"   ⚠️ [后台] 提取结果为空，跳过: '{segment[:20]}...'")
+                    continue
+                _store_cache_entry(segment, segment_answer)
+                logger.info(f"   💾 [后台] 子问题缓存写入完成: '{segment[:20]}...'")
+            except Exception as exc:
+                logger.warning(f"   ⚠️ [后台] 子问题缓存失败，跳过: '{segment[:20]}...' | error={exc}")
+    except Exception as outer_exc:  # pragma: no cover - defensive
+        logger.exception(f"   💥 [后台] daemon 线程崩溃，后续子问题写入已中断: {outer_exc}")
 
 def synthesize_response_node(state: WorkflowState) -> WorkflowState:
     """节点：合成最终用户响应（并执行缓存写回）"""

@@ -1,12 +1,46 @@
-import logging  # 导入日志模块，用于追踪智能体的决策路径
-from typing import Literal  # 用于类型提示，限制函数返回值的具体范围
+"""LangGraph 工作流路由层。
 
-# 获取名为 "agentic-workflow" 的日志记录器
+Phase 3 重构目标：把以前散落在 ``graph.py`` lambda、``cache_router``、
+``cache_rerank_router`` 中的字符串路由目标集中成 ``RouteTarget`` 常量，
+并把 ``pre_check`` 之后的“拦截/继续”决策抽出具名 ``pre_check_router``，
+与其他 router 形态一致，避免分散决策点。
+
+所有 router 仍然只读 state、不写 state，决策依据保留在节点内部。
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Final, Literal
+
 logger = logging.getLogger("agentic-workflow")
 
-def cache_router(state) -> Literal["synthesize_response", "rerank_cache", "research_supplement", "research"]:
-    """
-    语义缓存路由决策器（前置层）。
+
+class RouteTarget:
+    """LangGraph 节点名常量，与 ``graph.py`` 中 ``add_node`` 注册的名字保持一致。"""
+
+    PRE_CHECK: Final[str] = "pre_check"
+    CHECK_CACHE: Final[str] = "check_cache"
+    RERANK_CACHE: Final[str] = "rerank_cache"
+    RESEARCH: Final[str] = "research"
+    RESEARCH_SUPPLEMENT: Final[str] = "research_supplement"
+    SYNTHESIZE_RESPONSE: Final[str] = "synthesize_response"
+
+
+PreCheckTarget = Literal["check_cache", "synthesize_response"]
+CacheRouterTarget = Literal["synthesize_response", "rerank_cache", "research_supplement", "research"]
+RerankRouterTarget = Literal["synthesize_response", "research_supplement", "research"]
+
+
+def pre_check_router(state) -> PreCheckTarget:
+    """前置拦截后置路由：拦截则直接合成兜底回答，否则继续查缓存。"""
+    if state.get("intercepted", False):
+        return RouteTarget.SYNTHESIZE_RESPONSE  # type: ignore[return-value]
+    return RouteTarget.CHECK_CACHE  # type: ignore[return-value]
+
+
+def cache_router(state) -> CacheRouterTarget:
+    """语义缓存路由决策器（前置层）。
 
     逻辑：
     1. 如果 check_cache 找到了 exact、near_exact 或 edit_distance 候选，直接进入 synthesize_response，跳过 Reranker。
@@ -21,21 +55,21 @@ def cache_router(state) -> Literal["synthesize_response", "rerank_cache", "resea
 
     if reuse_mode == "partial_reuse":
         logger.info(f"👉 路由: 规则子问题命中，直接进入补充研究 -> '{query[:20]}...'")
-        return "research_supplement"
+        return RouteTarget.RESEARCH_SUPPLEMENT  # type: ignore[return-value]
 
     if cache_hit:
         if match_type in {"exact", "near_exact", "edit_distance"}:
             logger.info(f"👉 路由: {match_type} 命中，跳过 Reranker 直接合成 -> '{query[:20]}...'")
-            return "synthesize_response"
+            return RouteTarget.SYNTHESIZE_RESPONSE  # type: ignore[return-value]
         logger.info(f"👉 路由: 缓存有候选[{match_type}]，进入 Reranker -> '{query[:20]}...'")
-        return "rerank_cache"
-    else:
-        logger.info(f"👉 路由: 未命中缓存，开始研究 -> '{query[:20]}...'")
-        return "research"
+        return RouteTarget.RERANK_CACHE  # type: ignore[return-value]
 
-def cache_rerank_router(state) -> Literal["synthesize_response", "research_supplement", "research"]:
-    """
-    缓存复用裁判后置路由。
+    logger.info(f"👉 路由: 未命中缓存，开始研究 -> '{query[:20]}...'")
+    return RouteTarget.RESEARCH  # type: ignore[return-value]
+
+
+def cache_rerank_router(state) -> RerankRouterTarget:
+    """缓存复用裁判后置路由。
 
     逻辑：
     1. full_reuse -> 直接合成回答。
@@ -48,10 +82,21 @@ def cache_rerank_router(state) -> Literal["synthesize_response", "research_suppl
 
     if reuse_mode == "full_reuse":
         logger.info(f"👉 路由: Reranker 通过 ({score:.2f})，直接合成 -> '{query[:20]}...'")
-        return "synthesize_response"
+        return RouteTarget.SYNTHESIZE_RESPONSE  # type: ignore[return-value]
     if reuse_mode == "partial_reuse":
         logger.info(f"👉 路由: Reranker 判定部分复用 ({score:.2f})，进入补充研究 -> '{query[:20]}...'")
-        return "research_supplement"
+        return RouteTarget.RESEARCH_SUPPLEMENT  # type: ignore[return-value]
 
     logger.info(f"👉 路由: Reranker 拒绝 ({score:.2f})，进入研究 -> '{query[:20]}...'")
-    return "research"
+    return RouteTarget.RESEARCH  # type: ignore[return-value]
+
+
+__all__ = [
+    "RouteTarget",
+    "PreCheckTarget",
+    "CacheRouterTarget",
+    "RerankRouterTarget",
+    "pre_check_router",
+    "cache_router",
+    "cache_rerank_router",
+]

@@ -216,17 +216,41 @@ class SemanticCacheWrapper:
         """
         if clear:
             self.clear()
-            
+
         for item in qa_pairs:
-            q, a = item["question"], item["answer"]
-            seed_id = item.get("id")
-            
-            # 使用底层原生接口写入
-            self.cache.store(prompt=q, response=a)
-            self._seed_id_by_question[str(q)] = seed_id
-            self._answer_by_question[str(q)] = a
-            self._normalized_question_map[self.normalize_query(q)] = str(q)
-            self._near_exact_question_map[self.normalize_surface_query(q)] = str(q)
+            self.register_entry(item["question"], item["answer"], seed_id=item.get("id"))
+
+    def register_entry(self, prompt: str, answer: str, seed_id: Optional[int] = None) -> None:
+        """Write `(prompt, answer)` into the vector store and refresh the L1 lookup maps.
+
+        Single source of truth for cache writes used by `store_batch` (FAQ seed) and by
+        the workflow's runtime writeback path (`_store_cache_entry` in nodes.py).
+        Keeping the four `_*_by_question` maps consistent here means call sites no longer
+        need to know about cache internals.
+        """
+        if not prompt or not answer:
+            return
+
+        prompt_str = str(prompt)
+        self.cache.store(prompt=prompt_str, response=answer)
+        self._seed_id_by_question[prompt_str] = seed_id
+        self._answer_by_question[prompt_str] = answer
+        self._normalized_question_map[self.normalize_query(prompt_str)] = prompt_str
+        self._near_exact_question_map[self.normalize_surface_query(prompt_str)] = prompt_str
+
+    def contains_prompt_variant(self, prompt: str) -> bool:
+        """True if a normalized form of `prompt` is already registered in L1 maps.
+
+        Used by background subquery writeback to skip prompts that would only re-store an
+        existing exact/near_exact entry.
+        """
+        if not prompt:
+            return False
+        if self.normalize_query(prompt) in self._normalized_question_map:
+            return True
+        if self.normalize_surface_query(prompt) in self._near_exact_question_map:
+            return True
+        return False
 
     def check(self, query: str, distance_threshold: Optional[float] = None, num_results: int = 1) -> CacheResults:
         # ===== L1 exact fast path：归一化后完全一致则直接命中 =====

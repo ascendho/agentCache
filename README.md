@@ -176,6 +176,33 @@ TEST_SCENARIO_PROFILE=full SHOW_CONSOLE_RESULTS=true PYTHONPATH=. .venv/bin/pyth
 
 运行结果会覆盖写入 `outputs/run_summary.csv`（测试明细）和 `outputs/performance_report.txt`（聚合性能报表）。
 
+#### 运行单元测试（路由 / 标签 / 导出契约 / scenario / 分类器）
+
+```bash
+PYTHONPATH=. .venv/bin/python -m unittest discover -s tests/unit -v
+```
+
+单测覆盖 `tests/result_classifiers.py` 路径分类、`tests/summary_schema.py` 导出契约、`tests/scenarios.py` 输入校验、`src/workflow/edges.py` 路由 (`pre_check_router` / `cache_router` / `cache_rerank_router`) 以及 `src/api/server.py` 的 `LABEL_RULES`。重构落地后任一阶段都应保持其全绿。
+
+### 运行模式矩阵
+
+| 模式 | 入口 | 后台缓存写回是否计入 `total_latency` | 主要指标输出 |
+| --- | --- | --- | --- |
+| 离线评测（默认） | `src/main.py` | 是（runner 等待 `wait_for_background_tasks`） | `outputs/run_summary.csv` + `outputs/performance_report.txt` |
+| 离线评测（full） | `TEST_SCENARIO_PROFILE=full src/main.py` | 同上 | 同上 |
+| 在线 `/chat` | FastAPI POST | 是（`_finalize_total_latency` 在返回前 `wait_for_background_tasks`） | 单次 `ChatResponse` |
+| 在线 `/chat/stream` | FastAPI POST，`application/x-ndjson` | 是（`final` 事件前同步 `wait_for_background_tasks`） | 流式 `status` / `token` / `final` / `error` 事件 |
+
+注：在线响应的 `metrics.total_latency` 与离线 runner 的口径已经统一 —— 都包含子问题缓存后台写回；用户感知的"首屏延迟"通常显著小于 `total_latency`（流式接口可观察 `token` 首块时间）。
+
+### API 关键端点
+
+- `POST /validate` — 校验访问码；前端 `setSuccessUI` 使用。
+- `POST /chat` — 同步问答，返回 `ChatResponse`（含 `label_key` / `label_text` / `cache_written_prompts`）。
+- `POST /chat/stream` — 流式问答，事件类型见 `STREAM_EVENT_*` 常量（`status` / `token` / `final` / `error`）。
+- `GET /labels` — 返回 `label_key → text` 的映射表，作为前端 badge 文案的单一来源；CSS class 仍由前端 `BADGE_CONFIG` 持有。
+- `GET /health` — 启动状态探针（`ready` / `stage` / `message` / `error`）。
+
 当前 `performance_report.txt` 已接入真实 token 与人民币成本指标：
 - `ANALYSIS_MODEL_NAME` 按 Doubao-Seed-2.0-lite 基础模型低档价格计费：输入 `0.0006` 元/千tokens，输出 `0.0036` 元/千tokens，缓存命中输入 `0.00012` 元/千tokens。
 - `RESEARCH_MODEL_NAME` 按 DeepSeek-V3.2 基础模型价格计费：输入 `0.0020` 元/千tokens，输出 `0.0030` 元/千tokens，缓存命中输入 `0.00040` 元/千tokens。

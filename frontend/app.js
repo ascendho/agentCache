@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const CHAT_API_URL = '/chat/stream';
     const VALIDATE_URL = '/validate';
     const HEALTH_URL = '/health';
+    const LABELS_URL = '/labels';
     let isRequestLocked = false;
 
     const setRequestLocked = (locked) => {
@@ -239,6 +240,29 @@ document.addEventListener('DOMContentLoaded', () => {
         const labelKey = meta.label_key || fallbackLabelKey;
         return BADGE_CONFIG[labelKey] || BADGE_CONFIG.rag_full_research;
     };
+
+    // Pull authoritative badge text from the server so /labels is the single source of
+    // truth. CSS classes stay client-side because they are presentation. If the request
+    // fails we silently keep the local defaults baked into BADGE_CONFIG.
+    const ICON_PREFIX_RE = /^([^\w\u4e00-\u9fa5]+\s*)/;
+    const syncBadgeTextFromServer = async () => {
+        try {
+            const response = await fetch(LABELS_URL, { cache: 'no-store' });
+            if (!response.ok) return;
+            const payload = await response.json();
+            const labels = (payload && payload.labels) || {};
+            Object.entries(labels).forEach(([key, text]) => {
+                if (!BADGE_CONFIG[key] || typeof text !== 'string') return;
+                const localText = BADGE_CONFIG[key].text || '';
+                const iconMatch = localText.match(ICON_PREFIX_RE);
+                const iconPrefix = iconMatch ? iconMatch[1] : '';
+                BADGE_CONFIG[key] = { ...BADGE_CONFIG[key], text: iconPrefix + text };
+            });
+        } catch (_err) {
+            // Network glitch → keep local fallback text.
+        }
+    };
+    syncBadgeTextFromServer();
 
     window.copyToClipboard = (text, button) => {
         navigator.clipboard.writeText(text).then(() => {
