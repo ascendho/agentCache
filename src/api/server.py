@@ -54,6 +54,8 @@ system_status = {
     "stage": "not_started",
     "message": "Backend is starting up.",
     "last_error": None,
+    "cache_entry_count": 0,
+    "cache_has_contact_prompt": False,
 }
 
 
@@ -75,6 +77,15 @@ def init_system():
 
     update_system_status("warming_cache", "Warming FAQ cache...")
     cache = setup_cache()
+    cache_entry_count = len(getattr(cache, "_answer_by_question", {}) or {})
+    cache_has_contact_prompt = bool(getattr(cache, "contains_prompt_variant", lambda prompt: False)("怎么联系人工？"))
+    system_status["cache_entry_count"] = cache_entry_count
+    system_status["cache_has_contact_prompt"] = cache_has_contact_prompt
+    logger.info(
+        "FAQ cache warmed: entries=%s, contains '怎么联系人工？'=%s",
+        cache_entry_count,
+        cache_has_contact_prompt,
+    )
 
     update_system_status("creating_workflow", "Creating agent workflow...")
     workflow_app = create_agent_graph(cache, kb_index, embeddings)
@@ -129,6 +140,8 @@ async def health_check():
         "stage": system_status["stage"],
         "message": system_status["message"],
         "error": system_status["last_error"],
+        "cache_entry_count": system_status["cache_entry_count"],
+        "cache_has_contact_prompt": system_status["cache_has_contact_prompt"],
         "has_workflow": workflow_app is not None,
         "has_redis_client": redis_client is not None,
         "python_executable": sys.executable,
@@ -181,6 +194,7 @@ LABEL_RULES: list[tuple[str, str, callable]] = [
     ("cache_near_exact",    "Near-Exact Cache Hit",       lambda s: s.get("cache_hit", False) and s.get("cache_match_type") == "near_exact"),
     ("cache_edit_distance", "Edit-Distance Cache Hit",    lambda s: s.get("cache_hit", False) and s.get("cache_match_type") == "edit_distance"),
     ("cache_semantic_reuse","Reranked Cache Reuse",       lambda s: s.get("cache_reuse_mode") == "full_reuse"),
+    ("cache_dual_subquery", "Dual Subquery Cache Hit",    lambda s: s.get("cache_reuse_mode") == "dual_subquery"),
     ("cache_partial_reuse", "Partial Cache Reuse + RAG",  lambda s: s.get("cache_reuse_mode") == "partial_reuse"),
 ]
 DEFAULT_LABEL = ("rag_full_research", "LLM Analysis / Full RAG")
@@ -222,19 +236,50 @@ def build_stream_final_event(final_state: dict, latency_ms: float, answer: str) 
     }
 
 
+def _compute_elapsed_latency(start_time: float) -> float:
+    return round((time.time() - start_time) * 1000, 2)
+
+
+def _build_stream_ready_final_event(final_state: dict, start_time: float, answer: str) -> dict:
+    """Build the user-visible stream completion payload without waiting on background tasks.
+
+    Streaming UX should complete as soon as the answer is finalized. Background cache
+    extraction may continue asynchronously after the stream closes; synchronous /chat and
+    offline flows still use `_finalize_total_latency()` for background-inclusive totals.
+    """
+    return build_stream_final_event(final_state, _compute_elapsed_latency(start_time), answer)
+
+
+async def _request_disconnected(request: Request | None) -> bool:
+    if request is None:
+        return False
+    checker = getattr(request, "is_disconnected", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(await checker())
+    except Exception:
+        return True
+
+
 def _finalize_total_latency(state: dict, start_time: float) -> float:
     """等待后台任务完成、计算响应总耗时并同步到 state['metrics']['total_latency']。
 
-    流式与非流式接口都应在 final event 之前调用，以保证线上与离线 runner 的指标口径一致：
+    该 helper 主要服务于非流式 `/chat` 与离线 runner：
     后台子问题缓存写回的 token / 成本会被纳入本次响应统计。
+
+    `/chat/stream` 为保证用户体验，会在答案定稿后立即发出 final event，
+    不再等待后台缓存线程结束。
     """
     if isinstance(state, dict):
         wait_for_background_tasks(state)
-    latency = round((time.time() - start_time) * 1000, 2)
+    latency = _compute_elapsed_latency(start_time)
     if isinstance(state, dict):
-        metrics = state.setdefault("metrics", {})
-        if isinstance(metrics, dict):
-            metrics["total_latency"] = latency
+        metrics = state.get("metrics")
+        if not isinstance(metrics, dict):
+            metrics = {}
+            state["metrics"] = metrics
+        metrics["total_latency"] = latency
     return latency
 
 # Stream event type discriminators. Keep these in sync with frontend/app.js.
@@ -318,74 +363,114 @@ async def chat_stream_endpoint(payload: ChatRequest, request: Request):
     validate_chat_request(payload, client_ip)
 
     async def event_generator():
+        async def client_disconnected() -> bool:
+            disconnected = await _request_disconnected(request)
+            if disconnected:
+                logger.info("Streaming client disconnected; aborting remaining work.")
+            return disconnected
+
         start_time = time.time()
         try:
             logger.info(f"Processing streaming API Query: {payload.query}")
+            if await client_disconnected():
+                return
             state = build_initial_state(payload.query)
 
             yield stream_event(STREAM_EVENT_STATUS, stage=RouteTarget.PRE_CHECK, message="正在进行前置校验...")
             await asyncio.sleep(0)
+            if await client_disconnected():
+                return
             state = pre_check_node(state)
 
             if state.get("intercepted", False):
+                if await client_disconnected():
+                    return
                 state = synthesize_response_node(state)
                 answer = state.get("final_response", "")
                 for chunk in iter_text_chunks(answer):
+                    if await client_disconnected():
+                        return
                     yield stream_event(STREAM_EVENT_TOKEN, content=chunk)
                     await asyncio.sleep(0)
-                latency = _finalize_total_latency(state, start_time)
-                yield stream_event(STREAM_EVENT_FINAL, **build_stream_final_event(state, latency, answer))
+                if await client_disconnected():
+                    return
+                yield stream_event(STREAM_EVENT_FINAL, **_build_stream_ready_final_event(state, start_time, answer))
                 return
 
             yield stream_event(STREAM_EVENT_STATUS, stage=RouteTarget.CHECK_CACHE, message="正在检查缓存...")
             await asyncio.sleep(0)
+            if await client_disconnected():
+                return
             state = check_cache_node(state)
             route = cache_router(state)
 
             if route == RouteTarget.SYNTHESIZE_RESPONSE:
+                if await client_disconnected():
+                    return
                 state = synthesize_response_node(state)
                 answer = state.get("final_response", "")
                 for chunk in iter_text_chunks(answer):
+                    if await client_disconnected():
+                        return
                     yield stream_event(STREAM_EVENT_TOKEN, content=chunk)
                     await asyncio.sleep(0)
-                latency = _finalize_total_latency(state, start_time)
-                yield stream_event(STREAM_EVENT_FINAL, **build_stream_final_event(state, latency, answer))
+                if await client_disconnected():
+                    return
+                yield stream_event(STREAM_EVENT_FINAL, **_build_stream_ready_final_event(state, start_time, answer))
                 return
 
             if route == RouteTarget.RERANK_CACHE:
                 yield stream_event(STREAM_EVENT_STATUS, stage=RouteTarget.RERANK_CACHE, message="正在进行缓存语义裁判...")
                 await asyncio.sleep(0)
+                if await client_disconnected():
+                    return
                 state = rerank_cache_node(state)
                 route = cache_rerank_router(state)
                 if route == RouteTarget.SYNTHESIZE_RESPONSE:
+                    if await client_disconnected():
+                        return
                     state = synthesize_response_node(state)
                     answer = state.get("final_response", "")
                     for chunk in iter_text_chunks(answer):
+                        if await client_disconnected():
+                            return
                         yield stream_event(STREAM_EVENT_TOKEN, content=chunk)
                         await asyncio.sleep(0)
-                    latency = _finalize_total_latency(state, start_time)
-                    yield stream_event(STREAM_EVENT_FINAL, **build_stream_final_event(state, latency, answer))
+                    if await client_disconnected():
+                        return
+                    yield stream_event(STREAM_EVENT_FINAL, **_build_stream_ready_final_event(state, start_time, answer))
                     return
                 if route == RouteTarget.RESEARCH_SUPPLEMENT:
                     yield stream_event(STREAM_EVENT_STATUS, stage=RouteTarget.RESEARCH_SUPPLEMENT, message="正在补充缓存未覆盖的部分...")
                     await asyncio.sleep(0)
+                    if await client_disconnected():
+                        return
                     state = research_supplement_node(state)
+                    if await client_disconnected():
+                        return
                     state = synthesize_response_node(state)
                     answer = state.get("final_response", "")
                     for chunk in iter_text_chunks(answer):
+                        if await client_disconnected():
+                            return
                         yield stream_event(STREAM_EVENT_TOKEN, content=chunk)
                         await asyncio.sleep(0)
-                    latency = _finalize_total_latency(state, start_time)
-                    yield stream_event(STREAM_EVENT_FINAL, **build_stream_final_event(state, latency, answer))
+                    if await client_disconnected():
+                        return
+                    yield stream_event(STREAM_EVENT_FINAL, **_build_stream_ready_final_event(state, start_time, answer))
                     return
 
             yield stream_event(STREAM_EVENT_STATUS, stage=RouteTarget.RESEARCH, message="正在检索知识库并生成回答...")
             await asyncio.sleep(0)
+            if await client_disconnected():
+                return
             messages, research_llm_invocations, needs_final_generation = prepare_research_messages(payload.query)
 
             if needs_final_generation:
                 assembled_answer = ""
                 for chunk in get_research_llm().stream(messages):
+                    if await client_disconnected():
+                        return
                     piece = extract_chunk_text(chunk)
                     if not piece:
                         continue
@@ -406,6 +491,8 @@ async def chat_stream_endpoint(payload: ChatRequest, request: Request):
                 final_message = messages[-1]
                 assembled_answer = getattr(final_message, "content", "") or str(final_message)
                 for chunk in iter_text_chunks(assembled_answer):
+                    if await client_disconnected():
+                        return
                     yield stream_event(STREAM_EVENT_TOKEN, content=chunk)
                     await asyncio.sleep(0)
                 state = {
@@ -419,9 +506,15 @@ async def chat_stream_endpoint(payload: ChatRequest, request: Request):
                     },
                 }
 
+            if await client_disconnected():
+                return
             state = synthesize_response_node(state)
-            latency = _finalize_total_latency(state, start_time)
-            yield stream_event(STREAM_EVENT_FINAL, **build_stream_final_event(state, latency, state.get("final_response", assembled_answer)))
+            if await client_disconnected():
+                return
+            yield stream_event(
+                STREAM_EVENT_FINAL,
+                **_build_stream_ready_final_event(state, start_time, state.get("final_response", assembled_answer)),
+            )
         except Exception as exc:
             logger.exception("Error processing streaming query")
             yield stream_event(STREAM_EVENT_ERROR, message=str(exc) or "An internal error occurred while processing your request.")

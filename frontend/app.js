@@ -1,7 +1,9 @@
 document.addEventListener('DOMContentLoaded', () => {
+    const AUTO_SCROLL_THRESHOLD_PX = 96;
     const chatBox = document.getElementById('chat-box');
     const userInput = document.getElementById('user-input');
     const sendBtn = document.getElementById('send-btn');
+    const composerStopBtn = document.getElementById('composer-stop-btn');
     const accessCodeInput = document.getElementById('access-code');
     const saveKeyBtn = document.getElementById('save-key-btn');
     const togglePwdBtn = document.getElementById('toggle-pwd-btn');
@@ -19,6 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const HEALTH_URL = '/health';
     const LABELS_URL = '/labels';
     let isRequestLocked = false;
+    let shouldStickToBottom = true;
+    let currentStreamRequest = null;
 
     const setRequestLocked = (locked) => {
         isRequestLocked = locked;
@@ -28,6 +32,13 @@ document.addEventListener('DOMContentLoaded', () => {
             pill.classList.toggle('opacity-50', locked);
             pill.setAttribute('aria-disabled', locked ? 'true' : 'false');
         });
+    };
+
+    const setComposerStopVisible = (visible, stopping = false) => {
+        composerStopBtn.classList.toggle('hidden', !visible);
+        composerStopBtn.classList.toggle('inline-flex', visible);
+        composerStopBtn.disabled = !visible || stopping;
+        composerStopBtn.classList.toggle('cursor-wait', Boolean(visible && stopping));
     };
 
     // Theme Management
@@ -164,10 +175,22 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Helper: Scroll to bottom
-    const scrollToBottom = () => {
+    const isNearBottom = () => {
+        const remaining = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight;
+        return remaining <= AUTO_SCROLL_THRESHOLD_PX;
+    };
+
+    // Helper: Scroll to bottom only when the user is still following the stream.
+    const scrollToBottom = (force = false) => {
+        if (!force && !shouldStickToBottom) {
+            return;
+        }
         chatBox.scrollTop = chatBox.scrollHeight;
     };
+
+    chatBox.addEventListener('scroll', () => {
+        shouldStickToBottom = isNearBottom();
+    });
 
     // Helper: Escape HTML
     const escapeHTML = (str) => {
@@ -277,6 +300,22 @@ document.addEventListener('DOMContentLoaded', () => {
         userInput.focus();
     };
 
+    const buildCopyButtonHtml = (safeJsText) => {
+        return '<button class="hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-1.5 py-0.5 rounded cursor-pointer transition-colors" onclick="window.copyToClipboard(\'' + safeJsText + '\', this)">📋 复制</button>';
+    };
+
+    const buildRetryButtonHtml = (safeJsText, safeBubbleId) => {
+        return '<button class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 font-medium tracking-wide normal-case transition-colors hover:bg-indigo-100 dark:hover:bg-indigo-800/30 cursor-pointer" onclick="window.retryInPlace(\'' + safeJsText + '\', \'' + safeBubbleId + '\')" >↻ 重试</button>';
+    };
+
+    const buildStoppedBadgeHtml = (safeQueryText = '', safeBubbleId = '') => {
+        const retryButtonHtml = (safeQueryText && safeBubbleId) ? buildRetryButtonHtml(safeQueryText, safeBubbleId) : '';
+        return '<div class="mt-2 flex items-center space-x-2 text-[11px] uppercase">' +
+            '<span class="px-2.5 py-1 bg-gray-100 dark:bg-gray-700/60 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-600 rounded-full font-medium tracking-wide">⏹ 已停止</span>' +
+            retryButtonHtml +
+        '</div>';
+    };
+
     // Helper: Create User Message Element
     const appendUserMessage = (text) => {
         const msgDiv = document.createElement('div');
@@ -299,7 +338,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 '</svg>' +
             '</div>';
         chatBox.appendChild(msgDiv);
-        scrollToBottom();
+        scrollToBottom(true);
     };
 
     // Helper: Create Bot Message Element
@@ -337,7 +376,7 @@ document.addEventListener('DOMContentLoaded', () => {
             '</div>';
         
         chatBox.appendChild(msgDiv);
-        scrollToBottom();
+        scrollToBottom(true);
     };
 
     const createStreamingBotMessage = () => {
@@ -347,13 +386,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 text-white"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09l2.846.813-2.846.813a4.5 4.5 0 00-3.09 3.09z" /></svg>' +
             '</div>' +
             '<div class="flex flex-col flex-1 mr-8">' +
-                '<div class="flex space-x-2 mb-1 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 dark:text-gray-500 text-xs streaming-actions"></div>' +
+                '<div class="hidden space-x-2 mb-1 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 dark:text-gray-500 text-xs streaming-actions"></div>' +
                 '<div class="bg-white dark:bg-gray-800 p-4 rounded-2xl rounded-tl-sm shadow-sm border border-gray-100 dark:border-gray-700 text-gray-800 dark:text-gray-200 text-[15px] whitespace-pre-wrap leading-relaxed model-response font-medium transition-colors duration-300 markdown-content overflow-hidden streaming-body"></div>' +
                 '<div class="streaming-badge"></div>' +
             '</div>';
 
         chatBox.appendChild(msgDiv);
-        scrollToBottom();
+        scrollToBottom(true);
         return {
             root: msgDiv,
             body: msgDiv.querySelector('.streaming-body'),
@@ -361,6 +400,31 @@ document.addEventListener('DOMContentLoaded', () => {
             actions: msgDiv.querySelector('.streaming-actions'),
             rawText: ''
         };
+    };
+
+    const ensureStreamingBodyRendered = (streamMessage, text) => {
+        streamMessage.body.classList.remove('whitespace-pre-wrap');
+        streamMessage.body.classList.add('whitespace-normal');
+        streamMessage.body.innerHTML = formatText(text);
+    };
+
+    const ensureStreamingMessage = (requestState) => {
+        if (requestState.streamMessage) {
+            return requestState.streamMessage;
+        }
+        if (requestState.loaderId) {
+            removeLoadingIndicator(requestState.loaderId);
+            requestState.loaderId = null;
+        }
+        const streamMessage = createStreamingBotMessage();
+        requestState.streamMessage = streamMessage;
+        return streamMessage;
+    };
+
+    const setStreamingActionsHtml = (streamMessage, html) => {
+        streamMessage.actions.innerHTML = html;
+        streamMessage.actions.classList.toggle('hidden', !html);
+        streamMessage.actions.classList.toggle('flex', Boolean(html));
     };
 
     const appendStreamingChunk = (streamMessage, chunk) => {
@@ -372,9 +436,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const finalizeStreamingBotMessage = (streamMessage, meta) => {
         const finalText = streamMessage.rawText || meta.answer || '';
         const safeJsText = escapeHTML(finalText).replace(/'/g, "\\'").replace(/\n/g, "\\n");
-        streamMessage.body.innerHTML = formatText(finalText);
-        streamMessage.actions.innerHTML = '<button class="hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-1.5 py-0.5 rounded cursor-pointer transition-colors" onclick="window.copyToClipboard(\'' + safeJsText + '\', this)">📋 复制</button>';
+        ensureStreamingBodyRendered(streamMessage, finalText);
+        setStreamingActionsHtml(streamMessage, buildCopyButtonHtml(safeJsText));
         streamMessage.badge.innerHTML = buildBadgeHtml(meta);
+        scrollToBottom();
+    };
+
+    const markStreamingMessageStopped = (streamMessage, queryText = '', fallbackText = '已停止本次回答。') => {
+        const finalText = streamMessage.rawText || fallbackText;
+        const safeJsText = escapeHTML(finalText).replace(/'/g, "\\'").replace(/\n/g, "\\n");
+        const safeQueryText = escapeHTML(queryText || '').replace(/'/g, "\\'").replace(/\n/g, "\\n");
+        if (!streamMessage.root.id) {
+            streamMessage.root.id = 'stopped-bubble-' + Date.now();
+        }
+        const safeBubbleId = streamMessage.root.id.replace(/'/g, "\\'");
+        ensureStreamingBodyRendered(streamMessage, finalText);
+        setStreamingActionsHtml(streamMessage, buildCopyButtonHtml(safeJsText));
+        streamMessage.badge.innerHTML = buildStoppedBadgeHtml(safeQueryText, safeBubbleId);
         scrollToBottom();
     };
 
@@ -413,24 +491,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 </svg>
             </div>
             <div class="flex flex-col flex-1 mr-8">
-                <div class="p-4 py-5 flex items-center space-x-2 transition-colors duration-300 text-indigo-500 dark:text-purple-400">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="url(#sparkle-gradient)" stroke="none">
-                      <defs>
-                        <linearGradient id="sparkle-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                          <stop offset="0%" stop-color="#8b5cf6" />
-                          <stop offset="100%" stop-color="#3b82f6" />
-                        </linearGradient>
-                      </defs>
-                      <path d="M12 2L14.6 9.4L22 12L14.6 14.6L12 22L9.4 14.6L2 12L9.4 9.4L12 2Z" />
-                    </svg>
-                    <span class="text-[15px] font-medium tracking-wide animate-pulse bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600 dark:from-indigo-400 dark:to-purple-500">
-                        <span class="loader-text">Thinking...</span>
-                    </span>
+                <div class="p-4 py-5 flex items-center gap-3 transition-colors duration-300 text-indigo-500 dark:text-purple-400">
+                    <div class="flex items-center space-x-2 min-w-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="url(#sparkle-gradient)" stroke="none">
+                            <defs>
+                                <linearGradient id="sparkle-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#8b5cf6" />
+                                    <stop offset="100%" stop-color="#3b82f6" />
+                                </linearGradient>
+                            </defs>
+                            <path d="M12 2L14.6 9.4L22 12L14.6 14.6L12 22L9.4 14.6L2 12L9.4 9.4L12 2Z" />
+                        </svg>
+                        <span class="text-[15px] font-medium tracking-wide animate-pulse bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600 dark:from-indigo-400 dark:to-purple-500">
+                            <span class="loader-text">Thinking...</span>
+                        </span>
+                    </div>
                 </div>
             </div>
         `;
         chatBox.appendChild(msgDiv);
-        scrollToBottom();
+        scrollToBottom(true);
         return id;
     };
 
@@ -461,6 +541,59 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    window.retryStoppedResponse = (queryText, buttonElement) => {
+        if (isRequestLocked || !queryText) {
+            return;
+        }
+        if (buttonElement) {
+            buttonElement.disabled = true;
+            buttonElement.classList.add('opacity-60', 'cursor-wait');
+        }
+        handleSend(queryText);
+    };
+
+    window.retryInPlace = (queryText, bubbleId) => {
+        if (isRequestLocked || !queryText) return;
+        let target = null;
+        if (bubbleId) {
+            const root = document.getElementById(bubbleId);
+            if (root) {
+                target = {
+                    root,
+                    body: root.querySelector('.streaming-body'),
+                    badge: root.querySelector('.streaming-badge'),
+                    actions: root.querySelector('.streaming-actions'),
+                    rawText: '',
+                };
+            }
+        }
+        handleSend(queryText, true, target);
+    };
+
+    window.stopCurrentResponse = (buttonElement) => {
+        if (!currentStreamRequest || currentStreamRequest.stopping) {
+            return;
+        }
+        currentStreamRequest.stopping = true;
+        const stopButton = buttonElement || composerStopBtn;
+        if (stopButton) {
+            stopButton.disabled = true;
+            stopButton.classList.add('opacity-60', 'cursor-wait');
+        }
+        if (!currentStreamRequest.streamMessage) {
+            const streamMessage = ensureStreamingMessage(currentStreamRequest);
+            markStreamingMessageStopped(streamMessage, currentStreamRequest.query);
+        } else {
+            markStreamingMessageStopped(currentStreamRequest.streamMessage, currentStreamRequest.query);
+        }
+        if (currentStreamRequest.reader && typeof currentStreamRequest.reader.cancel === 'function') {
+            currentStreamRequest.reader.cancel().catch(() => {});
+        }
+        if (currentStreamRequest.abortController) {
+            currentStreamRequest.abortController.abort();
+        }
+    };
+
     const ensureBackendReady = async () => {
         try {
             const response = await fetch(HEALTH_URL, { cache: 'no-store' });
@@ -486,7 +619,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // Action: Handle Send
-    const handleSend = async (overrideText = null, isRetry = false) => {
+    const handleSend = async (overrideText = null, isRetry = false, retryIntoMessage = null) => {
         const query = typeof overrideText === 'string' ? overrideText : userInput.value.trim();
         const accessCode = finalAccessKey || accessCodeInput.value.trim();
 
@@ -498,8 +631,26 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        let loaderId = null;
+        const requestState = {
+            query,
+            abortController: new AbortController(),
+            reader: null,
+            streamMessage: retryIntoMessage || null,
+            loaderId: null,
+            stopping: false,
+            completed: false,
+        };
+        currentStreamRequest = requestState;
         setRequestLocked(true);
+        setComposerStopVisible(true);
+        if (retryIntoMessage) {
+            retryIntoMessage.rawText = '';
+            retryIntoMessage.body.classList.add('whitespace-pre-wrap');
+            retryIntoMessage.body.classList.remove('whitespace-normal');
+            retryIntoMessage.body.textContent = '';
+            retryIntoMessage.badge.innerHTML = '<div class="mt-2 text-[11px] text-indigo-400 dark:text-purple-400 animate-pulse">正在重新生成…</div>';
+            setStreamingActionsHtml(retryIntoMessage, '');
+        }
 
         try {
             window.lastAttemptedQuery = query; // Save for retry even when backend is not ready yet
@@ -519,8 +670,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 userInput.value = '';
             }
             
-            // Show loader
-            loaderId = createLoadingIndicator();
+            // Show loader (skip for in-place retry—existing bubble already shows loading state)
+            if (!retryIntoMessage) {
+                requestState.loaderId = createLoadingIndicator();
+            }
 
             // Request backend
             const response = await fetch(CHAT_API_URL, {
@@ -528,6 +681,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: {
                     'Content-Type': 'application/json',
                 },
+                signal: requestState.abortController.signal,
                 body: JSON.stringify({
                     query: query,
                     access_code: accessCode
@@ -552,9 +706,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const reader = response.body.getReader();
+            requestState.reader = reader;
             const decoder = new TextDecoder();
             let buffer = '';
-            let streamMessage = null;
 
             while (true) {
                 const { value, done } = await reader.read();
@@ -569,30 +723,23 @@ document.addEventListener('DOMContentLoaded', () => {
                     const event = JSON.parse(line);
 
                     if (event.type === 'status') {
-                        updateLoadingIndicator(loaderId, event.message || 'Thinking...');
+                        updateLoadingIndicator(requestState.loaderId, event.message || 'Thinking...');
                         continue;
                     }
 
                     if (event.type === 'token') {
-                        if (!streamMessage) {
-                            removeLoadingIndicator(loaderId);
-                            streamMessage = createStreamingBotMessage();
-                        }
+                        const streamMessage = ensureStreamingMessage(requestState);
                         appendStreamingChunk(streamMessage, event.content || '');
                         continue;
                     }
 
                     if (event.type === 'final') {
-                        if (!streamMessage) {
-                            removeLoadingIndicator(loaderId);
-                            streamMessage = createStreamingBotMessage();
-                            if (event.answer) {
-                                appendStreamingChunk(streamMessage, event.answer);
-                            }
-                        } else if (!streamMessage.rawText && event.answer) {
+                        const streamMessage = ensureStreamingMessage(requestState);
+                        if (!streamMessage.rawText && event.answer) {
                             appendStreamingChunk(streamMessage, event.answer);
                         }
                         finalizeStreamingBotMessage(streamMessage, event);
+                        requestState.completed = true;
                         continue;
                     }
 
@@ -602,21 +749,40 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            removeLoadingIndicator(loaderId);
+            if (requestState.loaderId) {
+                removeLoadingIndicator(requestState.loaderId);
+                requestState.loaderId = null;
+            }
             
             // Clear last attempt on success
             window.lastAttemptedQuery = "";
 
         } catch (error) {
-            if (loaderId) removeLoadingIndicator(loaderId);
-            // Render specific retry UI
-            if(error.message === 'Failed to fetch') {
-                 appendErrorMessage("网络请求失败，后端服务可能未启动或网络异常。", query);
+            const aborted = requestState.stopping || error.name === 'AbortError';
+            if (requestState.loaderId) {
+                removeLoadingIndicator(requestState.loaderId);
+                requestState.loaderId = null;
+            }
+
+            if (aborted) {
+                const streamMessage = ensureStreamingMessage(requestState);
+                markStreamingMessageStopped(streamMessage, requestState.query);
             } else {
-                 appendErrorMessage(error.message, query);
+                // Render specific retry UI
+                if(error.message === 'Failed to fetch') {
+                     appendErrorMessage("网络请求失败，后端服务可能未启动或网络异常。", query);
+                } else {
+                     appendErrorMessage(error.message, query);
+                }
             }
         } finally {
-            if (loaderId) removeLoadingIndicator(loaderId);
+            if (requestState.loaderId) {
+                removeLoadingIndicator(requestState.loaderId);
+            }
+            if (currentStreamRequest === requestState) {
+                currentStreamRequest = null;
+            }
+            setComposerStopVisible(false);
             setRequestLocked(false);
             userInput.focus();
         }
@@ -624,6 +790,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Listeners
     sendBtn.addEventListener('click', () => handleSend());
+    composerStopBtn.addEventListener('click', () => window.stopCurrentResponse(composerStopBtn));
     userInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter' && !isRequestLocked) handleSend();
     });

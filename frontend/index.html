@@ -58,7 +58,7 @@
         .markdown-content blockquote { border-left: 4px solid rgba(120, 120, 120, 0.3); padding-left: 1em; font-style: italic; color: inherit; opacity: 0.8; margin-bottom: 1em; }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=20260501-inplace-retry">
 </head>
 <body class="bg-gray-50 dark:bg-gray-900 font-sans h-screen flex items-center justify-center antialiased text-gray-800 dark:text-gray-200 p-2 sm:p-6 overflow-hidden relative transition-colors duration-300">
     <!-- Animated Background Blobs -->
@@ -129,8 +129,8 @@
         </div>
 
         <!-- Input Area Fixed Bottom -->
-        <div class="absolute bottom-0 w-full bg-gradient-to-t from-[#f8f9fa] via-[#f8f9fa] to-transparent dark:from-gray-800 dark:via-gray-800 dark:to-transparent pt-8 pb-6 px-4 transition-colors duration-300">
-            <div class="max-w-7xl mx-auto flex flex-col items-center">
+        <div class="absolute bottom-0 w-full bg-gradient-to-t from-[#f8f9fa] via-[#f8f9fa] to-transparent dark:from-gray-800 dark:via-gray-800 dark:to-transparent pt-8 pb-6 px-4 transition-colors duration-300 pointer-events-none">
+            <div class="max-w-7xl mx-auto flex flex-col items-center pointer-events-auto">
                 <!-- Persistent Quick Action Pills -->
                 <div class="flex w-full space-x-3 flex-wrap gap-y-3 mb-5 justify-center" id="quick-actions">
                     <button class="quick-pill bg-white/60 dark:bg-gray-800/50 backdrop-blur-md text-gray-700 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 text-[13px] px-5 py-2.5 rounded-2xl transition-all duration-300 shadow-[0_2px_12px_-4px_rgba(0,0,0,0.08)] dark:shadow-[0_2px_12px_-4px_rgba(0,0,0,0.3)] hover:shadow-[0_8px_20px_-6px_rgba(79,70,229,0.15)] dark:hover:shadow-[0_8px_20px_-6px_rgba(99,102,241,0.2)] hover:-translate-y-0.5 focus:outline-none font-medium flex items-center space-x-1.5 border border-white/40 dark:border-white/5">
@@ -158,17 +158,23 @@
                         class="flex-1 bg-transparent border-none outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 py-1 text-[15px]"
                         autocomplete="off"
                     />
-                    <button id="send-btn" class="ml-3 bg-gray-900 dark:bg-gray-700 hover:bg-black dark:hover:bg-gray-600 text-white rounded-xl p-2.5 h-10 w-10 flex items-center justify-center transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-4 h-4 translate-x-0.5">
-                          <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75" />
-                        </svg>
-                    </button>
+                    <div class="ml-3 flex items-center gap-3 shrink-0">
+                        <button id="composer-stop-btn" class="hidden h-10 items-center gap-2 rounded-full border border-gray-200 dark:border-gray-700 bg-white/80 dark:bg-gray-800/80 px-4 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm transition-all hover:bg-gray-50 dark:hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-60">
+                            <span class="text-red-500">■</span>
+                            <span>停止</span>
+                        </button>
+                        <button id="send-btn" class="bg-gray-900 dark:bg-gray-700 hover:bg-black dark:hover:bg-gray-600 text-white rounded-xl p-2.5 h-10 w-10 flex items-center justify-center transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-4 h-4 translate-x-0.5">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12h15m0 0l-6.75-6.75M19.5 12l-6.75 6.75" />
+                            </svg>
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
     </main>
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=20260501-inplace-retry"></script>
 </body>
 </html>

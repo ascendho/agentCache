@@ -42,7 +42,7 @@ CacheMatchType = Literal[
     "semantic",
     "none",
 ]
-CacheReuseMode = Literal["full_reuse", "partial_reuse", "reject", "none"]
+CacheReuseMode = Literal["full_reuse", "partial_reuse", "dual_subquery", "reject", "none"]
 RerankAttempt = Literal["none", "skipped", "primary", "fallback", "failed"]
 ModelFamily = Literal["analysis", "research"]
 

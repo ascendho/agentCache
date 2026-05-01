@@ -218,7 +218,21 @@ def check_cache_node(state: WorkflowState) -> WorkflowState:
                         deterministic_residual,
                     )
                 else:
-                    logger.info(f"   ✅ 缓存命中[{cache_match_type}] ({cache_confidence:.3f}): '{query}' -> 匹配到了 '{cache_matched_question}'")
+                    # 缺口不确定（0 个或 >1 个未覆盖段落）：跳过 Reranker，直接走全量 RAG。
+                    # Reranker 无法正确处理「子问题答案 vs 复合问题」的局部匹配场景，
+                    # 此时让它通过只会浪费一次 LLM 调用后依然被拒绝。
+                    cache_hit = False
+                    cache_matched_question = None
+                    cache_confidence = 0.0
+                    cache_seed_id = None
+                    cache_match_type = "none"
+                    cache_base_answer = ""
+                    answer = ""
+                    cache_reuse_mode = "none"
+                    logger.info(
+                        "   ⚠️ 子问题命中但缺口不确定，跳过 Reranker 直接走 RAG: '%s'",
+                        query,
+                    )
             else:
                 logger.info(f"   ✅ 缓存命中[{cache_match_type}] ({cache_confidence:.3f}): '{query}' -> 匹配到了 '{cache_matched_question}'")
         else:  # 未命中
@@ -567,6 +581,28 @@ def _should_use_merge_llm(cached_answer: str, supplemental_answer: str) -> bool:
         return False
     return True
 
+
+def _coerce_tool_args(
+    tool_name: str,
+    tool_args: Any,
+    *,
+    locked_search_query: Optional[str] = None,
+) -> Dict[str, Any]:
+    if isinstance(tool_args, dict):
+        normalized_args = tool_args.copy()
+    elif tool_args is None:
+        normalized_args = {}
+    else:
+        normalized_args = {"query": str(tool_args).strip()}
+
+    if tool_name != "search_knowledge_base" or not locked_search_query:
+        return normalized_args
+
+    coerced_args = normalized_args.copy()
+    coerced_args["query"] = locked_search_query
+    coerced_args.setdefault("top_k", normalized_args.get("top_k", 3))
+    return coerced_args
+
 def rerank_cache_node(state: WorkflowState) -> WorkflowState:
     """节点：对缓存命中候选做一次 LLM 语义复用裁定。
 
@@ -721,6 +757,8 @@ def prepare_research_messages(
     prompt_text: Optional[str] = None,
     llm_usage: Optional[LLMUsage] = None,
     usage_lock: Optional[Any] = None,
+    locked_search_query: Optional[str] = None,
+    research_mode: str = "research",
 ) -> Tuple[List[Any], int, bool]:
     """构造 research 阶段的消息历史。
 
@@ -751,9 +789,33 @@ def prepare_research_messages(
         for tool_call in response.tool_calls:
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
+            actual_tool_args = _coerce_tool_args(
+                tool_name,
+                tool_args,
+                locked_search_query=locked_search_query,
+            )
             try:
-                logger.info(f"   🔧 执行工具: {tool_name} {tool_args}")
-                tool_result = tools[0].invoke(tool_args)
+                if locked_search_query and tool_name == "search_knowledge_base":
+                    planned_query = ""
+                    if isinstance(tool_args, dict):
+                        planned_query = str(tool_args.get("query", "") or "").strip()
+                    actual_query = str(actual_tool_args.get("query", "") or "").strip()
+                    if planned_query and planned_query != actual_query:
+                        logger.info(
+                            "   🔒 补充研究锁定检索词[%s]: planned='%s' -> actual='%s'",
+                            research_mode,
+                            planned_query,
+                            actual_query,
+                        )
+                    logger.info(
+                        "   🔧 执行工具[%s]: %s %s",
+                        research_mode,
+                        tool_name,
+                        actual_tool_args,
+                    )
+                else:
+                    logger.info(f"   🔧 执行工具: {tool_name} {actual_tool_args}")
+                tool_result = tools[0].invoke(actual_tool_args)
             except Exception as e:
                 tool_result = f"Error executing tool: {e}"
             messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_call["id"]))
@@ -769,6 +831,8 @@ def execute_research(
     prompt_text: Optional[str] = None,
     llm_usage: Optional[LLMUsage] = None,
     usage_lock: Optional[Any] = None,
+    locked_search_query: Optional[str] = None,
+    research_mode: str = "research",
 ) -> Tuple[str, int]:
     """执行一次 research 流程，返回最终答案与 LLM 调用次数。"""
     messages, research_llm_invocations, needs_final_generation = prepare_research_messages(
@@ -776,6 +840,8 @@ def execute_research(
         prompt_text=prompt_text,
         llm_usage=llm_usage,
         usage_lock=usage_lock,
+        locked_search_query=locked_search_query,
+        research_mode=research_mode,
     )
 
     if needs_final_generation:
@@ -846,23 +912,51 @@ def research_supplement_node(state: WorkflowState) -> WorkflowState:
     cached_answer = state.get("cache_base_answer") or state.get("answer") or ""
 
     logger.info(f"🔎 正在补充研究缺口: '{residual_query}'")
+    logger.info("   🔒 补充研究仅检索缺口问题，原问题只用于合并答案: '%s'", residual_query)
 
-    supplement_prompt = RESEARCH_PROMPT_SUPPLEMENT.format(
-        original_query=original_query,
-        cached_answer=_clip_rerank_answer(cached_answer, max_chars=400),
-        residual_query=residual_query,
-    )
-    supplemental_answer, research_llm_invocations = execute_research(
-        residual_query,
-        prompt_text=supplement_prompt,
-        llm_usage=state.get("llm_usage"),
-        usage_lock=state.get("llm_usage_lock"),
-    )
+    # ── 缺口缓存短路：若缺口问题本身已在 L1 缓存中，直接复用，跳过 RAG ──
+    supplemental_answer: Optional[str] = None
+    research_llm_invocations = 0
+    _b1_from_cache = False
+    if _cache_instance:
+        from common.env import CACHE_DISTANCE_THRESHOLD
+        residual_cache_result = _cache_instance.check(
+            residual_query, distance_threshold=CACHE_DISTANCE_THRESHOLD
+        )
+        if residual_cache_result.matches:
+            top = residual_cache_result.matches[0]
+            if top.match_type in {
+                "exact", "near_exact", "subquery_exact", "subquery_near_exact", "edit_distance"
+            }:
+                logger.info(
+                    "   ⚡ 两个子问题均从缓存获取，跳过 RAG 补充缺口 '%s' [%s]",
+                    residual_query,
+                    top.match_type,
+                )
+                supplemental_answer = top.response
+                _b1_from_cache = True
+
+    if supplemental_answer is None:
+        supplement_prompt = RESEARCH_PROMPT_SUPPLEMENT.format(
+            cached_answer=_clip_rerank_answer(cached_answer, max_chars=400),
+            residual_query=residual_query,
+        )
+        supplemental_answer, research_llm_invocations = execute_research(
+            residual_query,
+            prompt_text=supplement_prompt,
+            llm_usage=state.get("llm_usage"),
+            usage_lock=state.get("llm_usage_lock"),
+            locked_search_query=residual_query,
+            research_mode="supplement",
+        )
 
     merge_llm_invocations = 0
     normalized_supplemental_answer = supplemental_answer.strip().rstrip("。！!?")
     if normalized_supplemental_answer == "无需补充":
         final_answer = cached_answer
+    elif _b1_from_cache:
+        # B1: 两个子问题均来自缓存，无需 LLM 合并，直接模板拼接。
+        final_answer = _merge_partial_answers_without_llm(cached_answer, supplemental_answer)
     else:
         try:
             if _should_use_merge_llm(cached_answer, supplemental_answer):
@@ -903,6 +997,7 @@ def research_supplement_node(state: WorkflowState) -> WorkflowState:
         "research_iterations": state.get("research_iterations", 0) + 1,
         "cache_writeback_entries": cache_writeback_entries,
         "execution_path": state["execution_path"] + ["supplement_researched"],
+        "cache_reuse_mode": "dual_subquery" if _b1_from_cache else state.get("cache_reuse_mode", "none"),
         "llm_calls": llm_calls,
         "metrics": metrics,
     }
@@ -1072,6 +1167,17 @@ def synthesize_response_node(state: WorkflowState) -> WorkflowState:
                 )
                 background_thread.start()
                 background_threads.append(background_thread)
+
+    if (
+        state.get("cache_reuse_mode") == "dual_subquery"
+        and not state.get("intercepted", False)
+        and _cache_instance
+        and final_response
+        and not _cache_contains_prompt_variant(state["query"])
+    ):
+        logger.info(f"   💾 [dual_subquery] 将合并答案写入缓存，下次相同问题直接命中: '{state['query'][:30]}...'")
+        _store_cache_entry(state["query"], final_response)
+        remember_written_prompt(state["query"])
 
     if (
         state.get("cache_reuse_mode") == "full_reuse"
